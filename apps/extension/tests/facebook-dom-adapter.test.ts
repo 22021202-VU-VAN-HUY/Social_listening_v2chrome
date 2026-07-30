@@ -453,6 +453,104 @@ describe("FacebookDomAdapter", () => {
     ).toBeNull();
     expect(parseFacebookAbsoluteTimeLabel("07/29/2026 10:30")).toBeNull();
   });
+
+  it("extracts the current Facebook search-card DOM without retaining profile links", () => {
+    const dom = new JSDOM(
+      `
+        <div role="feed">
+          <div aria-posinset="5">
+            <div data-ad-rendering-role="profile_name">
+              Người tham gia ẩn danh
+            </div>
+            <a aria-labelledby="rendered-post-time" href="?__cft__[0]=redacted">
+              scrambled timestamp characters
+            </a>
+            <div data-ad-rendering-role="story_message">
+              <div data-ad-comet-preview="message" data-ad-preview="message">
+                VINSMART FUTURE, công ty có chính sách tốt.
+              </div>
+            </div>
+            <div
+              role="article"
+              aria-label="Bình luận dưới tên Bình vào 2 ngày trước"
+            >
+              <a role="link" href="https://www.facebook.com/profile.handle">
+                <span dir="auto">Bình</span>
+              </a>
+              <a
+                role="link"
+                aria-label="Thứ Ba, 28 Tháng 7, 2026 lúc 11:44"
+                href="/groups/laptrinhvienit/posts/123456/?comment_id=654321"
+              >
+                2 ngày
+              </a>
+              <span lang="vi-VN">
+                <div dir="auto">Bình luận thật từ cấu trúc Facebook mới.</div>
+              </span>
+            </div>
+          </div>
+        </div>
+      `,
+      {
+        url: "https://www.facebook.com/groups/laptrinhvienit/search/?q=Vinsmart%20Future"
+      }
+    );
+    const renderedTime = dom.window.document.querySelector(
+      "[aria-labelledby='rendered-post-time']"
+    );
+    if (!renderedTime) throw new Error("Expected rendered timestamp fixture.");
+    Object.defineProperty(renderedTime, "innerText", {
+      configurable: true,
+      value: "28 tháng 7 lúc 11:26"
+    });
+
+    const adapter = new FacebookDomAdapter(
+      dom.window.document,
+      dom.window.location.href,
+      now
+    );
+    const posts = adapter.extractPosts({
+      sourceExternalId: "laptrinhvienit",
+      keywords: [
+        {
+          id: "22222222-2222-4222-8222-222222222222",
+          value: "Vinsmart Future",
+          matchMode: "contains_phrase"
+        }
+      ],
+      windowStartUtc: "2026-07-23T03:00:00.000Z",
+      windowEndUtc: now.toISOString(),
+      maxPosts: 10
+    });
+    const comments = adapter.extractComments({
+      postExternalId: "123456",
+      maxComments: 10
+    });
+
+    expect(posts).toHaveLength(1);
+    expect(posts[0]).toMatchObject({
+      externalId: "123456",
+      publishedAt: new Date(2026, 6, 28, 11, 26).toISOString(),
+      timeParseStatus: "parsed",
+      author: {
+        authorName: null,
+        isAnonymous: true,
+        authorKind: "anonymous"
+      }
+    });
+    expect(comments).toHaveLength(1);
+    expect(comments[0]).toMatchObject({
+      externalId: "654321",
+      postExternalId: "123456",
+      body: "Bình luận thật từ cấu trúc Facebook mới.",
+      author: {
+        authorName: "Bình",
+        isAnonymous: false,
+        authorKind: "real"
+      }
+    });
+    expect(JSON.stringify({ posts, comments })).not.toContain("profile.handle");
+  });
 });
 
 describe("keyword and anonymous normalization", () => {

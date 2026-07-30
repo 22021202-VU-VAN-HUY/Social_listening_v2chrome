@@ -42,6 +42,7 @@ const ANONYMOUS_LABELS = [
 const POST_ROOT_SELECTORS = [
   "[data-sl-post]",
   "[data-pagelet^='FeedUnit_']",
+  "[aria-posinset]",
   "article",
   "div[role='article']"
 ] as const;
@@ -51,6 +52,7 @@ const COMMENT_ROOT_SELECTORS = [
   "[data-commentid]",
   "[data-comment-id]",
   "[aria-label^='Comment by']",
+  "[aria-label^='Bình luận dưới tên']",
   "[aria-label^='Bình luận của']"
 ] as const;
 
@@ -104,7 +106,12 @@ interface CommentExtractionOptions {
 }
 
 function visibleText(element: Element | null): string {
-  return (element?.textContent ?? "").replace(/\s+/gu, " ").trim();
+  if (!element) return "";
+  const rendered =
+    "innerText" in element && typeof element.innerText === "string"
+      ? element.innerText
+      : element.textContent ?? "";
+  return rendered.replace(/\s+/gu, " ").trim();
 }
 
 function normalizedLabel(value: string): string {
@@ -215,12 +222,15 @@ function authorFromRoot(root: Element, comment: boolean): SafeAuthorDto {
     ? [
         "[data-sl-comment-author]",
         "[data-testid='comment_author_link']",
+        "[data-ad-rendering-role='profile_name']",
         "h3 strong",
         "h3 a[role='link']",
-        "strong a[role='link']"
+        "strong a[role='link']",
+        "a[role='link']"
       ]
     : [
         "[data-sl-author]",
+        "[data-ad-rendering-role='profile_name']",
         "[data-testid='story-subtitle'] strong",
         "h2 strong",
         "h2 a[role='link']",
@@ -392,6 +402,48 @@ export function parseFacebookAbsoluteTimeLabel(value: string): string | null {
   });
 }
 
+function parseFacebookCompactTimeLabel(
+  value: string,
+  now: Date
+): string | null {
+  const normalized = normalizedLabel(value);
+  const vietnamese =
+    /^(\d{1,2}) thang (\d{1,2}) luc (\d{1,2}):(\d{2})$/u.exec(normalized);
+  if (!vietnamese) return null;
+
+  const day = Number(vietnamese[1]);
+  const month = Number(vietnamese[2]);
+  const hour = Number(vietnamese[3]);
+  const minute = Number(vietnamese[4]);
+  if (
+    month < 1 ||
+    month > 12 ||
+    hour < 0 ||
+    hour > 23 ||
+    minute < 0 ||
+    minute > 59
+  ) {
+    return null;
+  }
+
+  let year = now.getFullYear();
+  let parsed = new Date(year, month - 1, day, hour, minute, 0, 0);
+  if (parsed.getTime() > now.getTime() + 24 * 60 * 60 * 1_000) {
+    year -= 1;
+    parsed = new Date(year, month - 1, day, hour, minute, 0, 0);
+  }
+  if (
+    parsed.getFullYear() !== year ||
+    parsed.getMonth() !== month - 1 ||
+    parsed.getDate() !== day ||
+    parsed.getHours() !== hour ||
+    parsed.getMinutes() !== minute
+  ) {
+    return null;
+  }
+  return parsed.toISOString();
+}
+
 function timestampFromRoot(root: Element, now: Date): TimestampResult {
   const candidates: string[] = [];
   for (const element of root.querySelectorAll(
@@ -442,6 +494,15 @@ function timestampFromRoot(root: Element, now: Date): TimestampResult {
         publishedAt: new Date(parsed).toISOString(),
         timeParseStatus: "parsed"
       };
+    }
+  }
+
+  // Facebook's current feed reorders timestamp characters with CSS. In the
+  // live page textContent is scrambled, while innerText is the date users see.
+  for (const element of root.querySelectorAll("[aria-labelledby]")) {
+    const compact = parseFacebookCompactTimeLabel(visibleText(element), now);
+    if (compact) {
+      return { publishedAt: compact, timeParseStatus: "parsed" };
     }
   }
 
@@ -743,11 +804,13 @@ export class FacebookDomAdapter {
 
     return [...this.document.querySelectorAll("div[role='article']")].filter(
       (element) =>
-        !this.findPostUrl(element) &&
         Boolean(
           element.querySelector(
             "a[href*='comment_id='], [data-sl-comment-body], [data-commentid]"
           )
+        ) &&
+        !element.querySelector(
+          "[data-ad-rendering-role='story_message'], [data-sl-post-body]"
         )
     );
   }
@@ -784,7 +847,8 @@ export class FacebookDomAdapter {
       const body = findFirstText(root, [
         "[data-sl-comment-body]",
         "[data-ad-preview='message']",
-        "[data-testid='comment_body']"
+        "[data-testid='comment_body']",
+        "span[lang]"
       ]).slice(0, 50_000);
       const explicitId =
         root.getAttribute("data-sl-comment-id") ??
@@ -807,7 +871,8 @@ export class FacebookDomAdapter {
       const body = findFirstText(root, [
         "[data-sl-comment-body]",
         "[data-ad-preview='message']",
-        "[data-testid='comment_body']"
+        "[data-testid='comment_body']",
+        "span[lang]"
       ]).slice(0, 50_000);
       if (!body) continue;
 

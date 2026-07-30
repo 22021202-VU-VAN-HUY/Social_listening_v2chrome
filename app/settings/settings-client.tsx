@@ -61,7 +61,7 @@ type CrawlSettings = {
   enabled: boolean;
 };
 
-const MIN_EXTENSION_VERSION = [0, 1, 2] as const;
+const MIN_EXTENSION_VERSION = [0, 1, 3] as const;
 
 function apiErrorCode(error: ApiError): string {
   const payload = asRecord(error.payload);
@@ -537,7 +537,7 @@ export function SettingsClient() {
       }
       if (!currentExtension.compatible) {
         throw new Error(
-          `Extension ${currentExtension.version} đã cũ. Mở chrome://extensions, bấm Reload cho Listening Social để dùng bản 0.1.2 rồi thử lại.`,
+          `Extension ${currentExtension.version} đã cũ. Mở chrome://extensions, bấm Reload cho Listening Social để dùng bản 0.1.3 rồi thử lại.`,
         );
       }
       if (currentExtension.state === "offline") {
