@@ -1,0 +1,108 @@
+name: listening-socialmediav2
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: listening
+      POSTGRES_USER: listening
+      POSTGRES_PASSWORD: listening
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U listening -d listening"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  migrate:
+    build:
+      context: .
+      dockerfile: services/api/Dockerfile
+    environment:
+      DATABASE_URL: postgres://listening:listening@postgres:5432/listening
+      WORKSPACE_ID: 00000000-0000-4000-8000-000000000001
+    command:
+      - sh
+      - -c
+      - node dist/scripts/migrate.js && node dist/scripts/seed.js
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    build:
+      context: .
+      dockerfile: services/api/Dockerfile
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: 4000
+      DATABASE_URL: postgres://listening:listening@postgres:5432/listening
+      WORKSPACE_ID: 00000000-0000-4000-8000-000000000001
+      DEVICE_ONLINE_SECONDS: 60
+      LEASE_TTL_SECONDS: 45
+      ADAPTER_VERSION: facebook-dom-v1
+      CORS_ORIGINS: "http://localhost:3000,http://127.0.0.1:3000,http://localhost:${WEB_PORT:-3000},http://127.0.0.1:${WEB_PORT:-3000}"
+    ports:
+      - "4000:4000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:4000/health/live').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  worker:
+    build:
+      context: services/worker
+      dockerfile: Dockerfile
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgres://listening:listening@postgres:5432/listening
+      SENTIMENT_PROVIDER: ${SENTIMENT_PROVIDER:-heuristic}
+      SENTIMENT_MODEL: ${SENTIMENT_MODEL:-vi-lexicon-v1}
+      SENTIMENT_BASE_URL: ${SENTIMENT_BASE_URL:-http://ollama:11434}
+      SENTIMENT_API_KEY: ${SENTIMENT_API_KEY:-}
+      SENTIMENT_TOPIC: VinSmart Future / VinFuture
+      ALLOW_HEURISTIC_FALLBACK: ${ALLOW_HEURISTIC_FALLBACK:-true}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_BASE_URL: http://localhost:4000/api/v1
+    environment:
+      NEXT_PUBLIC_API_BASE_URL: http://localhost:4000/api/v1
+    ports:
+      - "${WEB_PORT:-3000}:3000"
+    depends_on:
+      api:
+        condition: service_healthy
+
+  ollama:
+    image: ollama/ollama:latest
+    profiles: ["ai-local"]
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+
+volumes:
+  postgres-data:
+  ollama-data:

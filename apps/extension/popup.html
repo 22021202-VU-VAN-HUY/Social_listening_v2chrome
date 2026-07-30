@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Listening Social</title>
+    <link rel="stylesheet" href="/src/popup/popup.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <header>
+        <div class="brand-mark" aria-hidden="true">LS</div>
+        <div>
+          <p class="eyebrow">FACEBOOK AGENT</p>
+          <h1>Listening Social</h1>
+        </div>
+        <span id="statusBadge" class="status status--offline">Đang kiểm tra</span>
+      </header>
+
+      <section class="panel" aria-labelledby="connectionTitle">
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow">KẾT NỐI</p>
+            <h2 id="connectionTitle">Thiết bị này</h2>
+          </div>
+          <button id="refreshButton" class="icon-button" type="button" aria-label="Làm mới trạng thái">↻</button>
+        </div>
+        <dl class="facts">
+          <div>
+            <dt>Installation</dt>
+            <dd id="installationId">—</dd>
+          </div>
+          <div>
+            <dt>Job hiện tại</dt>
+            <dd id="jobId">Không có</dd>
+          </div>
+          <div>
+            <dt>Giai đoạn</dt>
+            <dd id="runnerPhase">Idle</dd>
+          </div>
+        </dl>
+      </section>
+
+      <form id="settingsForm" class="panel">
+        <label for="apiBaseUrl">API base URL</label>
+        <input id="apiBaseUrl" name="apiBaseUrl" type="url" required spellcheck="false" />
+
+        <label for="pairingCode">Mã ghép một lần</label>
+        <input
+          id="pairingCode"
+          name="pairingCode"
+          inputmode="numeric"
+          autocomplete="one-time-code"
+          placeholder="Nhập mã từ Settings"
+          maxlength="32"
+        />
+
+        <p id="message" class="message" role="status" aria-live="polite"></p>
+
+        <div class="actions">
+          <button id="pairButton" class="button button--primary" type="submit">Ghép extension</button>
+          <button id="unpairButton" class="button button--danger" type="button">Hủy ghép</button>
+        </div>
+      </form>
+
+      <p class="privacy-note">
+        Extension không đọc hoặc gửi mật khẩu, cookie, URL hồ sơ, username/handle hay Facebook user ID.
+      </p>
+    </main>
+    <script type="module" src="/src/popup/popup.ts"></script>
+  </body>
+</html>

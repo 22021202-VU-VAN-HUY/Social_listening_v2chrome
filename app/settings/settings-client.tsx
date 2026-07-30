@@ -1,0 +1,1145 @@
+"use client";
+
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import {
+  DataNotice,
+  EmptyState,
+} from "../components/ui";
+import {
+  apiRequest,
+  asBoolean,
+  asNumber,
+  asRecord,
+  asString,
+  extractId,
+  formatDateTime,
+  saveActiveJobId,
+  unwrapItems,
+} from "../lib/api";
+
+type Platform = "facebook" | "tiktok" | "threads";
+type DataMode = "live" | "offline" | "degraded";
+
+type ExtensionStatus = {
+  state: "unpaired" | "online" | "offline" | "crawling" | "needs-login";
+  version: string;
+  heartbeatAt: string | null;
+  deviceName: string;
+  compatible: boolean;
+};
+
+type GroupSource = {
+  id: string;
+  name: string;
+  url: string;
+  selected: boolean;
+  active: boolean;
+  discoveredAt: string | null;
+  lastError: string | null;
+};
+
+type Keyword = {
+  id: string;
+  value: string;
+  enabled: boolean;
+  matchType: "whole_word" | "contains_phrase";
+  demo?: boolean;
+};
+
+type CrawlSettings = {
+  lookbackDays: 0 | 3 | 7 | 30;
+  maxSourcesPerJob: number;
+  maxPostsPerSource: number;
+  maxCommentsPerPost: number;
+  maxRuntimeMinutes: number;
+  enabled: boolean;
+};
+
+const DEFAULT_KEYWORDS: Keyword[] = [
+  {
+    id: "demo-keyword-vsf",
+    value: "VSF",
+    enabled: true,
+    matchType: "whole_word",
+    demo: true,
+  },
+  {
+    id: "demo-keyword-vinsmart-future",
+    value: "vinsmart Future",
+    enabled: true,
+    matchType: "contains_phrase",
+    demo: true,
+  },
+  {
+    id: "demo-keyword-vinfuture",
+    value: "Vinfuture",
+    enabled: true,
+    matchType: "whole_word",
+    demo: true,
+  },
+  {
+    id: "demo-keyword-vin-future",
+    value: "Vin Future",
+    enabled: true,
+    matchType: "contains_phrase",
+    demo: true,
+  },
+];
+
+const DEMO_GROUPS: GroupSource[] = [
+  {
+    id: "demo-group-tech",
+    name: "Cộng đồng Công nghệ Việt",
+    url: "https://www.facebook.com/groups/",
+    selected: true,
+    active: true,
+    discoveredAt: "2026-07-30T08:40:00+07:00",
+    lastError: null,
+  },
+  {
+    id: "demo-group-science",
+    name: "Khoa học & Đổi mới",
+    url: "https://www.facebook.com/groups/",
+    selected: true,
+    active: true,
+    discoveredAt: "2026-07-30T08:40:00+07:00",
+    lastError: null,
+  },
+  {
+    id: "demo-group-ai",
+    name: "Chuyện AI Việt Nam",
+    url: "https://www.facebook.com/groups/",
+    selected: false,
+    active: true,
+    discoveredAt: "2026-07-30T08:39:00+07:00",
+    lastError: null,
+  },
+  {
+    id: "demo-group-innovation",
+    name: "Đổi mới sáng tạo Việt Nam",
+    url: "https://www.facebook.com/groups/",
+    selected: false,
+    active: true,
+    discoveredAt: "2026-07-30T08:39:00+07:00",
+    lastError: null,
+  },
+];
+
+const OFFLINE_EXTENSION: ExtensionStatus = {
+  state: "offline",
+  version: "—",
+  heartbeatAt: null,
+  deviceName: "Chưa nhận diện",
+  compatible: true,
+};
+
+function normalizeExtension(value: unknown): ExtensionStatus {
+  const firstDevice = unwrapItems(value)[0];
+  const record = asRecord(firstDevice ?? value);
+  const rawState = asString(
+    record.state ?? record.status ?? record.connectionStatus,
+    "unpaired",
+  )
+    .toLowerCase()
+    .replaceAll("_", "-");
+  let state: ExtensionStatus["state"] = "unpaired";
+  if (["online", "connected", "ready", "idle"].includes(rawState)) state = "online";
+  if (["offline", "disconnected"].includes(rawState)) state = "offline";
+  if (["crawling", "busy", "running"].includes(rawState)) state = "crawling";
+  if (["needs-login", "need-login", "login-required"].includes(rawState)) {
+    state = "needs-login";
+  }
+  return {
+    state,
+    version: asString(record.version ?? record.extensionVersion, "—"),
+    heartbeatAt:
+      asString(
+          record.heartbeatAt ??
+          record.heartbeat_at ??
+          record.lastSeenAt ??
+          record.lastHeartbeatAt ??
+          record.last_heartbeat_at,
+      ) || null,
+    deviceName: asString(
+      record.deviceName ?? record.device_name ?? record.name,
+      "Extension Chrome",
+    ),
+    compatible: asBoolean(
+      record.compatible ?? record.isCompatible ?? record.is_compatible,
+      true,
+    ),
+  };
+}
+
+function normalizeGroup(value: unknown): GroupSource | null {
+  const record = asRecord(value);
+  const id = String(record.id ?? record.externalId ?? record.external_id ?? "");
+  const name = asString(record.name ?? record.title);
+  if (!id || !name) return null;
+  return {
+    id,
+    name,
+    url: asString(
+      record.url ??
+        record.link ??
+        record.canonicalUrl ??
+        record.canonical_url ??
+        record.externalUrl ??
+        record.external_url,
+    ),
+    selected: asBoolean(
+      record.selected ?? record.isSelected ?? record.is_selected,
+    ),
+    active: asBoolean(record.active ?? record.isActive ?? record.is_active, true),
+    discoveredAt:
+      asString(
+        record.discoveredAt ??
+          record.discovered_at ??
+          record.lastDiscoveredAt ??
+          record.last_discovered_at ??
+          record.lastSeenAt ??
+          record.last_seen_at,
+      ) || null,
+    lastError:
+      asString(
+        record.lastError ??
+          record.last_error ??
+          record.lastCrawlError ??
+          record.last_crawl_error ??
+          record.error,
+      ) || null,
+  };
+}
+
+function normalizeKeyword(value: unknown): Keyword | null {
+  const record = asRecord(value);
+  const id = String(record.id ?? "");
+  const text = asString(record.value ?? record.keyword ?? record.text);
+  if (!id || !text) return null;
+  const rawMatch = asString(
+    record.matchType ?? record.match_type ?? record.matchMode ?? record.match_mode,
+    text.includes(" ") ? "contains_phrase" : "whole_word",
+  );
+  return {
+    id,
+    value: text,
+    enabled: asBoolean(
+      record.enabled ??
+        record.isEnabled ??
+        record.is_enabled ??
+        record.active ??
+        record.isActive,
+      true,
+    ),
+    matchType:
+      rawMatch === "whole_word" ? "whole_word" : "contains_phrase",
+  };
+}
+
+function normalizeSettings(value: unknown): CrawlSettings {
+  const record = asRecord(value);
+  const preset = asString(
+    record.lookbackPreset ?? record.lookback_preset,
+  );
+  const presetDays =
+    preset === "today"
+      ? 0
+      : preset === "3_days"
+        ? 3
+        : preset === "7_days"
+          ? 7
+          : preset === "30_days"
+            ? 30
+            : undefined;
+  const rawDays =
+    presetDays ??
+    asNumber(record.lookbackDays ?? record.lookback_days ?? record.days, 7);
+  const lookbackDays: CrawlSettings["lookbackDays"] = [0, 3, 7, 30].includes(
+    rawDays,
+  )
+    ? (rawDays as CrawlSettings["lookbackDays"])
+    : 7;
+  return {
+    lookbackDays,
+    maxSourcesPerJob: asNumber(
+      record.maxSourcesPerJob ?? record.max_sources_per_job,
+      50,
+    ),
+    maxPostsPerSource: asNumber(
+      record.maxPostsPerSource ?? record.max_posts_per_source,
+      300,
+    ),
+    maxCommentsPerPost: asNumber(
+      record.maxCommentsPerPost ?? record.max_comments_per_post,
+      500,
+    ),
+    maxRuntimeMinutes: asNumber(
+      record.maxRuntimeMinutes ?? record.max_runtime_minutes,
+      120,
+    ),
+    enabled: asBoolean(record.enabled, true),
+  };
+}
+
+function lookbackPreset(days: CrawlSettings["lookbackDays"]) {
+  return days === 0 ? "today" : `${days}_days`;
+}
+
+function extensionLabel(state: ExtensionStatus["state"]): string {
+  return {
+    unpaired: "Chưa ghép",
+    online: "Sẵn sàng",
+    offline: "Ngoại tuyến",
+    crawling: "Đang crawl",
+    "needs-login": "Cần đăng nhập",
+  }[state];
+}
+
+export function SettingsClient() {
+  const [platform, setPlatform] = useState<Platform>("facebook");
+  const [mode, setMode] = useState<DataMode>("live");
+  const [notice, setNotice] = useState("Đang đọc thiết lập…");
+  const [extension, setExtension] =
+    useState<ExtensionStatus>(OFFLINE_EXTENSION);
+  const [groups, setGroups] = useState<GroupSource[]>([]);
+  const [keywords, setKeywords] = useState<Keyword[]>([]);
+  const [settings, setSettings] = useState<CrawlSettings>({
+    lookbackDays: 7,
+    maxSourcesPerJob: 50,
+    maxPostsPerSource: 300,
+    maxCommentsPerPost: 500,
+    maxRuntimeMinutes: 120,
+    enabled: true,
+  });
+  const [groupQuery, setGroupQuery] = useState("");
+  const [keywordInput, setKeywordInput] = useState("");
+  const [busyAction, setBusyAction] = useState("");
+  const [feedback, setFeedback] = useState<{
+    type: "success" | "error" | "info";
+    text: string;
+  } | null>(null);
+  const [pairingCode, setPairingCode] = useState("");
+  const [pairingExpiry, setPairingExpiry] = useState("");
+  const loaded = useRef(false);
+
+  const loadSettings = useCallback(async () => {
+    const [extensionResult, groupsResult, keywordsResult, settingsResult] =
+      await Promise.allSettled([
+        apiRequest<unknown>("/extension/status"),
+        apiRequest<unknown>("/sources?platform=facebook"),
+        apiRequest<unknown>("/keywords"),
+        apiRequest<unknown>("/settings/facebook"),
+      ]);
+
+    const successCount = [
+      extensionResult,
+      groupsResult,
+      keywordsResult,
+      settingsResult,
+    ].filter((result) => result.status === "fulfilled").length;
+
+    if (!successCount) {
+      setMode("offline");
+      setNotice(
+        "API chưa phản hồi. Group và từ khóa dưới đây là dữ liệu minh họa; thay đổi chưa được lưu.",
+      );
+      setExtension(OFFLINE_EXTENSION);
+      if (!loaded.current) {
+        setGroups(DEMO_GROUPS);
+        setKeywords(DEFAULT_KEYWORDS);
+      }
+    } else {
+      setMode(successCount === 4 ? "live" : "degraded");
+      setNotice(
+        successCount === 4
+          ? "Thiết lập đang đồng bộ trực tiếp với API."
+          : `${successCount}/4 nguồn thiết lập đã phản hồi; các phần còn thiếu được để trống.`,
+      );
+      if (extensionResult.status === "fulfilled") {
+        setExtension(normalizeExtension(extensionResult.value));
+      }
+      if (groupsResult.status === "fulfilled") {
+        setGroups(
+          unwrapItems(groupsResult.value)
+            .map(normalizeGroup)
+            .filter((group): group is GroupSource => group !== null),
+        );
+      }
+      if (keywordsResult.status === "fulfilled") {
+        setKeywords(
+          unwrapItems(keywordsResult.value)
+            .map(normalizeKeyword)
+            .filter((keyword): keyword is Keyword => keyword !== null),
+        );
+      }
+      if (settingsResult.status === "fulfilled") {
+        setSettings(normalizeSettings(settingsResult.value));
+      }
+    }
+    loaded.current = true;
+  }, []);
+
+  const refreshExtension = useCallback(async () => {
+    try {
+      const response = await apiRequest<unknown>("/extension/status");
+      setExtension(normalizeExtension(response));
+    } catch {
+      setExtension((current) =>
+        current.state === "unpaired"
+          ? current
+          : { ...current, state: "offline" },
+      );
+    }
+  }, []);
+
+  useEffect(() => {
+    const initialLoad = window.setTimeout(() => void loadSettings(), 0);
+    const interval = window.setInterval(
+      () => void refreshExtension(),
+      5_000,
+    );
+    return () => {
+      window.clearTimeout(initialLoad);
+      window.clearInterval(interval);
+    };
+  }, [loadSettings, refreshExtension]);
+
+  const filteredGroups = useMemo(() => {
+    const query = groupQuery.trim().toLocaleLowerCase("vi-VN");
+    if (!query) return groups;
+    return groups.filter((group) =>
+      group.name.toLocaleLowerCase("vi-VN").includes(query),
+    );
+  }, [groupQuery, groups]);
+
+  const selectedGroupIds = useMemo(
+    () => groups.filter((group) => group.selected).map((group) => group.id),
+    [groups],
+  );
+  const enabledKeywords = keywords.filter((keyword) => keyword.enabled);
+  const allVisibleSelected =
+    filteredGroups.length > 0 &&
+    filteredGroups.every((group) => group.selected);
+  const canCrawl =
+    extension.state === "online" &&
+    selectedGroupIds.length > 0 &&
+    enabledKeywords.length > 0;
+
+  function toggleGroup(id: string, selected: boolean) {
+    setGroups((current) =>
+      current.map((group) =>
+        group.id === id ? { ...group, selected } : group,
+      ),
+    );
+  }
+
+  function toggleAllVisible(selected: boolean) {
+    const visibleIds = new Set(filteredGroups.map((group) => group.id));
+    setGroups((current) =>
+      current.map((group) =>
+        visibleIds.has(group.id) ? { ...group, selected } : group,
+      ),
+    );
+  }
+
+  async function createPairingCode() {
+    setBusyAction("pair");
+    setFeedback(null);
+    try {
+      const response = await apiRequest<unknown>("/extension/pairing-codes", {
+        method: "POST",
+        body: JSON.stringify({}),
+      });
+      const record = asRecord(response);
+      const code = asString(record.code ?? record.pairingCode ?? record.pairing_code);
+      if (!code) throw new Error("API không trả về mã ghép.");
+      setPairingCode(code);
+      setPairingExpiry(
+        asString(record.expiresAt ?? record.expires_at),
+      );
+      setFeedback({
+        type: "success",
+        text: "Đã tạo mã. Nhập mã này vào extension trên cùng trình duyệt.",
+      });
+    } catch (error) {
+      setFeedback({
+        type: "error",
+        text:
+          error instanceof Error
+            ? error.message
+            : "Không thể tạo mã ghép extension.",
+      });
+    } finally {
+      setBusyAction("");
+    }
+  }
+
+  async function syncGroups() {
+    setBusyAction("sync");
+    setFeedback(null);
+    try {
+      const response = await apiRequest<unknown>("/jobs/discover-sources", {
+        method: "POST",
+        body: JSON.stringify({ platform: "facebook" }),
+      });
+      const jobId = extractId(response);
+      if (jobId) saveActiveJobId(jobId);
+      setFeedback({
+        type: "success",
+        text: jobId
+          ? "Đã giao job lấy group cho extension. Theo dõi tiến trình tại trang Jobs."
+          : "Đã gửi yêu cầu lấy danh sách group.",
+      });
+      window.setTimeout(() => void loadSettings(), 2_000);
+    } catch (error) {
+      setFeedback({
+        type: "error",
+        text:
+          error instanceof Error
+            ? error.message
+            : "Không thể bắt đầu lấy danh sách group.",
+      });
+    } finally {
+      setBusyAction("");
+    }
+  }
+
+  async function saveGroups(showFeedback = true) {
+    await apiRequest<unknown>("/sources/selection", {
+      method: "PUT",
+      body: JSON.stringify({
+        platform: "facebook",
+        sourceIds: selectedGroupIds,
+      }),
+    });
+    if (showFeedback) {
+      setFeedback({
+        type: "success",
+        text: `Đã lưu ${selectedGroupIds.length} group dùng cho các lần crawl sau.`,
+      });
+    }
+  }
+
+  async function handleSaveGroups() {
+    setBusyAction("save-groups");
+    setFeedback(null);
+    try {
+      await saveGroups();
+    } catch (error) {
+      setFeedback({
+        type: "error",
+        text:
+          error instanceof Error
+            ? error.message
+            : "Không thể lưu lựa chọn group.",
+      });
+    } finally {
+      setBusyAction("");
+    }
+  }
+
+  async function addKeyword(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const value = keywordInput.trim();
+    if (!value) return;
+    const normalized = value.toLocaleLowerCase("vi-VN");
+    if (
+      keywords.some(
+        (keyword) =>
+          keyword.value.trim().toLocaleLowerCase("vi-VN") === normalized,
+      )
+    ) {
+      setFeedback({ type: "error", text: "Từ khóa này đã tồn tại." });
+      return;
+    }
+
+    setBusyAction("add-keyword");
+    setFeedback(null);
+    try {
+      const response = await apiRequest<unknown>("/keywords", {
+        method: "POST",
+        body: JSON.stringify({
+          platform: "facebook",
+          value,
+          active: true,
+          matchMode: value.includes(" ") ? "contains_phrase" : "whole_word",
+        }),
+      });
+      const keyword = normalizeKeyword(response);
+      if (!keyword) throw new Error("API không trả về từ khóa vừa tạo.");
+      setKeywords((current) => [...current, keyword]);
+      setKeywordInput("");
+      setFeedback({ type: "success", text: `Đã thêm từ khóa “${value}”.` });
+    } catch (error) {
+      setFeedback({
+        type: "error",
+        text:
+          error instanceof Error ? error.message : "Không thể thêm từ khóa.",
+      });
+    } finally {
+      setBusyAction("");
+    }
+  }
+
+  async function toggleKeyword(keyword: Keyword, enabled: boolean) {
+    setKeywords((current) =>
+      current.map((item) =>
+        item.id === keyword.id ? { ...item, enabled } : item,
+      ),
+    );
+    if (keyword.demo) {
+      setFeedback({
+        type: "info",
+        text: "Đây là dữ liệu minh họa; trạng thái chỉ thay đổi trên màn hình.",
+      });
+      return;
+    }
+
+    try {
+      await apiRequest<unknown>(`/keywords/${encodeURIComponent(keyword.id)}`, {
+        method: "PATCH",
+        body: JSON.stringify({ active: enabled }),
+      });
+    } catch (error) {
+      setKeywords((current) =>
+        current.map((item) =>
+          item.id === keyword.id ? { ...item, enabled: keyword.enabled } : item,
+        ),
+      );
+      setFeedback({
+        type: "error",
+        text:
+          error instanceof Error
+            ? error.message
+            : "Không thể cập nhật từ khóa.",
+      });
+    }
+  }
+
+  async function startCrawl() {
+    setBusyAction("crawl");
+    setFeedback(null);
+    try {
+      await Promise.all([
+        apiRequest<unknown>("/settings/facebook", {
+          method: "PUT",
+          body: JSON.stringify({
+            lookbackPreset: lookbackPreset(settings.lookbackDays),
+            crawlComments: true,
+            maxSourcesPerJob: settings.maxSourcesPerJob,
+            maxPostsPerSource: settings.maxPostsPerSource,
+            maxCommentsPerPost: settings.maxCommentsPerPost,
+            maxRuntimeMinutes: settings.maxRuntimeMinutes,
+            enabled: settings.enabled,
+          }),
+        }),
+        saveGroups(false),
+      ]);
+      const response = await apiRequest<unknown>("/jobs/crawl", {
+        method: "POST",
+        body: JSON.stringify({
+          platform: "facebook",
+          sourceIds: selectedGroupIds,
+          keywordIds: enabledKeywords.map((keyword) => keyword.id),
+          lookbackPreset: lookbackPreset(settings.lookbackDays),
+        }),
+      });
+      const jobId = extractId(response);
+      if (!jobId) throw new Error("API không trả về ID của job crawl.");
+      saveActiveJobId(jobId);
+      setFeedback({
+        type: "success",
+        text: "Job crawl đã được tạo. Extension sẽ chỉ mở một tab Facebook và tự đóng khi hoàn tất.",
+      });
+    } catch (error) {
+      setFeedback({
+        type: "error",
+        text:
+          error instanceof Error ? error.message : "Không thể bắt đầu crawl.",
+      });
+    } finally {
+      setBusyAction("");
+    }
+  }
+
+  return (
+    <div className="page-stack settings-page">
+      <section className="page-intro">
+        <div>
+          <span className="section-kicker">Control plane</span>
+          <h2>Chọn đúng nguồn, nghe đúng tín hiệu</h2>
+          <p>
+            Extension lọc từ khóa rồi lưu đầy đủ metadata/ngữ cảnh bài cha
+            cùng bình luận và phản hồi. Hệ thống không tự đăng bài, bình luận,
+            like hay thực hiện tương tác Facebook.
+          </p>
+        </div>
+        <div className="privacy-callout">
+          <span aria-hidden="true">P</span>
+          <p>
+            <strong>Tối thiểu hóa dữ liệu cá nhân</strong>
+            Chỉ lưu tên hiển thị hoặc trạng thái ẩn danh. Không lưu link hồ sơ.
+          </p>
+        </div>
+      </section>
+
+      <DataNotice mode={mode} message={notice} />
+
+      {feedback && (
+        <div
+          className={`feedback feedback-${feedback.type}`}
+          role={feedback.type === "error" ? "alert" : "status"}
+        >
+          <span aria-hidden="true">
+            {feedback.type === "success"
+              ? "✓"
+              : feedback.type === "error"
+                ? "!"
+                : "i"}
+          </span>
+          <p>{feedback.text}</p>
+          <button
+            type="button"
+            onClick={() => setFeedback(null)}
+            aria-label="Đóng thông báo"
+          >
+            ×
+          </button>
+        </div>
+      )}
+
+      <div className="platform-tabs" role="tablist" aria-label="Nền tảng">
+        {(["facebook", "tiktok", "threads"] as Platform[]).map((item) => (
+          <button
+            type="button"
+            role="tab"
+            aria-selected={platform === item}
+            className={platform === item ? "is-active" : ""}
+            onClick={() => setPlatform(item)}
+            key={item}
+          >
+            <span className={`platform-monogram platform-monogram-${item}`}>
+              {item === "facebook" ? "f" : item === "tiktok" ? "t" : "@"}
+            </span>
+            <span>
+              <strong>
+                {item === "facebook"
+                  ? "Facebook"
+                  : item === "tiktok"
+                    ? "TikTok"
+                    : "Threads"}
+              </strong>
+              <small>{item === "facebook" ? "MVP đang hoạt động" : "Giai đoạn 2"}</small>
+            </span>
+          </button>
+        ))}
+      </div>
+
+      {platform === "facebook" ? (
+        <div className="settings-layout" role="tabpanel">
+          <section className="panel settings-section extension-section">
+            <div className="settings-section-heading">
+              <div className="section-number">01</div>
+              <div>
+                <span className="section-kicker">Kết nối trình duyệt</span>
+                <h3>Facebook Extension</h3>
+                <p>Extension đang đăng nhập Facebook trên máy của bạn.</p>
+              </div>
+              <span className={`connection-state state-${extension.state}`}>
+                <span aria-hidden="true" />
+                {extensionLabel(extension.state)}
+              </span>
+            </div>
+
+            <div className="extension-grid">
+              <div>
+                <span>Thiết bị</span>
+                <strong>{extension.deviceName}</strong>
+              </div>
+              <div>
+                <span>Phiên bản</span>
+                <strong>{extension.version}</strong>
+              </div>
+              <div>
+                <span>Heartbeat</span>
+                <strong>{formatDateTime(extension.heartbeatAt)}</strong>
+              </div>
+              <div>
+                <span>Tương thích API</span>
+                <strong className={extension.compatible ? "text-good" : "text-bad"}>
+                  {extension.compatible ? "Sẵn sàng" : "Cần cập nhật"}
+                </strong>
+              </div>
+            </div>
+
+            {!extension.compatible && (
+              <p className="inline-warning">
+                Phiên bản extension hiện tại không tương thích API contract.
+                Hãy cập nhật trước khi crawl.
+              </p>
+            )}
+
+            <div className="section-actions">
+              <button
+                className="button button-secondary"
+                type="button"
+                onClick={() => void createPairingCode()}
+                disabled={busyAction === "pair"}
+              >
+                {busyAction === "pair" ? "Đang tạo mã…" : "Tạo mã ghép extension"}
+              </button>
+              <button
+                className="button button-primary"
+                type="button"
+                onClick={() => void syncGroups()}
+                disabled={
+                  busyAction === "sync" ||
+                  !["online", "crawling"].includes(extension.state)
+                }
+              >
+                {busyAction === "sync"
+                  ? "Đang gửi yêu cầu…"
+                  : "Lấy group đã tham gia"}
+              </button>
+            </div>
+
+            {pairingCode && (
+              <div className="pairing-code" aria-live="polite">
+                <span>Mã ghép một lần</span>
+                <strong>{pairingCode}</strong>
+                <small>
+                  {pairingExpiry
+                    ? `Hết hạn ${formatDateTime(pairingExpiry)}`
+                    : "Nhập mã trong extension để hoàn tất kết nối."}
+                </small>
+              </div>
+            )}
+          </section>
+
+          <section className="panel settings-section groups-section">
+            <div className="settings-section-heading">
+              <div className="section-number">02</div>
+              <div>
+                <span className="section-kicker">Nguồn Facebook</span>
+                <h3>Group đã tham gia</h3>
+                <p>
+                  Extension lọc post trong group được chọn, lưu metadata/ngữ
+                  cảnh của post khớp rồi thu thập comment/reply.
+                </p>
+              </div>
+              <span className="selection-counter">
+                <strong>{selectedGroupIds.length}</strong>/{groups.length} đã chọn
+              </span>
+            </div>
+
+            <div className="group-toolbar">
+              <label className="search-field">
+                <span className="sr-only">Tìm tên group</span>
+                <span aria-hidden="true">⌕</span>
+                <input
+                  value={groupQuery}
+                  onChange={(event) => setGroupQuery(event.target.value)}
+                  placeholder="Tìm theo tên group…"
+                />
+              </label>
+              <label className="check-all">
+                <input
+                  type="checkbox"
+                  checked={allVisibleSelected}
+                  onChange={(event) => toggleAllVisible(event.target.checked)}
+                  disabled={!filteredGroups.length}
+                />
+                Chọn tất cả đang hiển thị
+              </label>
+            </div>
+
+            {filteredGroups.length ? (
+              <div className="group-list">
+                {filteredGroups.map((group) => (
+                  <div className="group-row" key={group.id}>
+                    <label
+                      className="group-check-cell"
+                      aria-label={`Chọn group ${group.name}`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={group.selected}
+                        onChange={(event) =>
+                          toggleGroup(group.id, event.target.checked)
+                        }
+                      />
+                      <span className="custom-checkbox" aria-hidden="true">
+                        ✓
+                      </span>
+                    </label>
+                    <span className="group-main">
+                      <strong>{group.name}</strong>
+                      <small>
+                        Phát hiện {formatDateTime(group.discoveredAt)}
+                      </small>
+                    </span>
+                    <span
+                      className={`source-state${group.active ? " is-active" : ""}`}
+                    >
+                      {group.active ? "Đang hoạt động" : "Tạm dừng"}
+                    </span>
+                    {group.lastError && (
+                      <span className="group-error" title={group.lastError}>
+                        Có lỗi gần nhất
+                      </span>
+                    )}
+                    {group.url ? (
+                      <a
+                        href={group.url}
+                        target="_blank"
+                        rel="noreferrer"
+                        onClick={(event) => event.stopPropagation()}
+                        aria-label={`Mở group ${group.name} trong tab mới`}
+                      >
+                        Mở group ↗
+                      </a>
+                    ) : (
+                      <span className="muted-link">Không có link</span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <EmptyState
+                title={groups.length ? "Không tìm thấy group" : "Chưa có group"}
+                description={
+                  groups.length
+                    ? "Thử tìm bằng tên khác."
+                    : "Kết nối extension rồi chọn “Lấy group đã tham gia”."
+                }
+              />
+            )}
+
+            <div className="section-actions section-actions-end">
+              <span>
+                Extension chỉ mở tối đa <strong>1 tab Facebook</strong> và tự
+                đóng tab sau khi hoàn tất.
+              </span>
+              <button
+                className="button button-secondary"
+                type="button"
+                onClick={() => void handleSaveGroups()}
+                disabled={busyAction === "save-groups" || !groups.length}
+              >
+                {busyAction === "save-groups" ? "Đang lưu…" : "Lưu lựa chọn"}
+              </button>
+            </div>
+          </section>
+
+          <section className="panel settings-section keyword-section">
+            <div className="settings-section-heading">
+              <div className="section-number">03</div>
+              <div>
+                <span className="section-kicker">Lọc trước khi lưu</span>
+                <h3>Từ khóa theo dõi</h3>
+                <p>
+                  Từ khóa được đối chiếu trên bài cha. Post khớp được lưu làm
+                  metadata/ngữ cảnh đầy đủ cho comment; comment/reply vẫn là
+                  dữ liệu listening chính.
+                </p>
+              </div>
+              <span className="selection-counter">
+                <strong>{enabledKeywords.length}</strong> đang bật
+              </span>
+            </div>
+
+            <div className="keyword-list">
+              {keywords.map((keyword) => (
+                <div
+                  className={`keyword-row${keyword.enabled ? "" : " is-disabled"}`}
+                  key={keyword.id}
+                >
+                  <span className="keyword-value">{keyword.value}</span>
+                  <span className="match-type">
+                    {keyword.matchType === "whole_word"
+                      ? "Khớp nguyên từ"
+                      : "Khớp cụm từ"}
+                  </span>
+                  <label className="mini-switch">
+                    <span className="sr-only">
+                      {keyword.enabled ? "Tắt" : "Bật"} từ khóa {keyword.value}
+                    </span>
+                    <input
+                      type="checkbox"
+                      checked={keyword.enabled}
+                      onChange={(event) =>
+                        void toggleKeyword(keyword, event.target.checked)
+                      }
+                    />
+                    <span aria-hidden="true" />
+                  </label>
+                </div>
+              ))}
+            </div>
+
+            <form className="keyword-form" onSubmit={addKeyword}>
+              <label>
+                <span>Thêm từ khóa mới</span>
+                <input
+                  value={keywordInput}
+                  onChange={(event) => setKeywordInput(event.target.value)}
+                  placeholder="Ví dụ: Giải thưởng VinFuture"
+                  maxLength={100}
+                />
+              </label>
+              <button
+                className="button button-secondary"
+                type="submit"
+                disabled={busyAction === "add-keyword" || !keywordInput.trim()}
+              >
+                {busyAction === "add-keyword" ? "Đang thêm…" : "Thêm từ khóa"}
+              </button>
+            </form>
+          </section>
+
+          <section className="panel settings-section crawl-section">
+            <div className="settings-section-heading">
+              <div className="section-number">04</div>
+              <div>
+                <span className="section-kicker">Phạm vi thu thập</span>
+                <h3>Thời gian bài cha & bình luận</h3>
+                <p>
+                  Áp dụng cho lần lấy comment/reply tiếp theo trên các group đã chọn.
+                </p>
+              </div>
+            </div>
+
+            <fieldset className="lookback-options">
+              <legend>Xét bài cha được đăng từ</legend>
+              {[
+                [0, "Hôm nay", "Từ 00:00 đến hiện tại"],
+                [3, "3 ngày", "Theo dõi ngắn hạn"],
+                [7, "7 ngày", "Khuyến nghị"],
+                [30, "30 ngày", "Khối lượng lớn"],
+              ].map(([days, label, description]) => (
+                <label
+                  className={
+                    settings.lookbackDays === days ? "is-selected" : ""
+                  }
+                  key={String(days)}
+                >
+                  <input
+                    type="radio"
+                    name="lookback"
+                    value={days}
+                    checked={settings.lookbackDays === days}
+                    onChange={() =>
+                      setSettings((current) => ({
+                        ...current,
+                        lookbackDays: days as CrawlSettings["lookbackDays"],
+                      }))
+                    }
+                  />
+                  <strong>{label}</strong>
+                  <small>{description}</small>
+                </label>
+              ))}
+            </fieldset>
+
+            <div className="collection-policy" role="note">
+              <span aria-hidden="true">C</span>
+              <div>
+                <strong>Luôn thu thập comment và reply</strong>
+                <p>
+                  Với mỗi post khớp, hệ thống lưu source, URL, body, tên tác giả
+                  hoặc trạng thái ẩn danh, thời gian đăng, thời gian thu thập và
+                  keyword hits. Comment cũng chỉ lưu tên hiển thị hoặc ẩn danh,
+                  không lưu link hồ sơ cá nhân.
+                </p>
+              </div>
+            </div>
+
+            <div className="crawl-summary">
+              <div>
+                <span>Group</span>
+                <strong>{selectedGroupIds.length}</strong>
+              </div>
+              <div>
+                <span>Từ khóa bật</span>
+                <strong>{enabledKeywords.length}</strong>
+              </div>
+              <div>
+                <span>Khoảng lấy</span>
+                <strong>
+                  {settings.lookbackDays === 0
+                    ? "Hôm nay"
+                    : `${settings.lookbackDays} ngày`}
+                </strong>
+              </div>
+              <div>
+                <span>Nội dung</span>
+                <strong>Comment + reply</strong>
+              </div>
+            </div>
+
+            <div className="crawl-action">
+              <div>
+                <strong>Lấy comment thủ công</strong>
+                <p>
+                  Job sẽ được cập nhật trên web mỗi 5 giây. Có thể đóng trang này
+                  trong khi extension chạy nền.
+                </p>
+                {!canCrawl && (
+                  <span className="validation-message">
+                    Cần extension online, ít nhất 1 group và 1 từ khóa đang bật.
+                  </span>
+                )}
+              </div>
+              <button
+                className="button button-primary button-large"
+                type="button"
+                onClick={() => void startCrawl()}
+                disabled={!canCrawl || busyAction === "crawl"}
+              >
+                {busyAction === "crawl"
+                  ? "Đang tạo job…"
+                  : "Bắt đầu lấy comment"}
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : (
+        <section className="panel coming-soon" role="tabpanel">
+          <span className={`platform-monogram platform-monogram-${platform}`}>
+            {platform === "tiktok" ? "t" : "@"}
+          </span>
+          <span className="section-kicker">Giai đoạn 2</span>
+          <h3>{platform === "tiktok" ? "TikTok" : "Threads"} chưa được bật</h3>
+          <p>
+            Connector cần quyền API chính thức trước khi có thể thu thập dữ liệu.
+            Khi được bật, comment/reply vẫn là dữ liệu listening chính; post
+            khớp được lưu metadata/ngữ cảnh đầy đủ.
+          </p>
+          <div className="future-platform-grid">
+            <div>
+              <span>Trạng thái connector</span>
+              <strong>Chưa cấu hình</strong>
+            </div>
+            <div>
+              <span>Chế độ tìm kiếm</span>
+              <strong>{platform === "threads" ? "RECENT" : "Keyword search"}</strong>
+            </div>
+            <div>
+              <span>Từ khóa dùng chung</span>
+              <strong>{enabledKeywords.length || 4}</strong>
+            </div>
+          </div>
+          <button className="button button-secondary" type="button" disabled>
+            Kiểm tra kết nối
+          </button>
+        </section>
+      )}
+    </div>
+  );
+}

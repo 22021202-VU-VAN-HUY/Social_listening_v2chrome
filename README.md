@@ -1,0 +1,192 @@
+# listening_socialmediav2
+
+Ứng dụng social listening cho chủ đề VinSmart Future / VinFuture. Bản MVP thu
+thập comment/reply Facebook qua Chrome Extension; bài viết cha vẫn được lưu đủ
+metadata để lọc keyword và làm ngữ cảnh. Web là control plane để cấu hình, chạy
+job, theo dõi tiến độ mỗi 5 giây và xem sentiment comment
+`positive | negative | neutral`.
+
+TikTok và Threads đã có màn hình cấu hình nhưng connector được khóa cho tới khi
+có API/quyền truy cập phù hợp.
+
+## Thành phần
+
+```text
+Web (vinext/React) ── REST ── API (Fastify) ── PostgreSQL
+                             │                      │
+Chrome Extension ────────────┘                Sentiment worker
+  └─ tối đa 1 tab Facebook nền
+```
+
+- `app/`: dashboard, jobs và settings.
+- `services/api/`: API, migration, seed, job lease/fencing và ingest.
+- `services/worker/`: hàng đợi chỉ phân tích sentiment comment/reply.
+- `apps/extension/`: Chrome Manifest V3, Facebook DOM adapter và tab runner.
+- `packages/contracts/`: Zod contract dùng chung.
+- `compose.yaml`: PostgreSQL, migrate, API, worker và web.
+- `PROJECT_PLAN.md`: thiết kế, flow, acceptance criteria và rủi ro đầy đủ.
+- `docs/DATA_DICTIONARY.md`: trường post/comment, timestamp, keyword và sentiment.
+- `docs/READ_ONLY_FACEBOOK.md`: allowlist thao tác đọc và các hành vi bị cấm.
+- `docs/AUTHOR_PRIVACY.md`: contract tên hiển thị/ẩn danh, không theo dõi profile.
+
+## Chạy nhanh bằng Docker
+
+Yêu cầu Docker Desktop và Docker Compose.
+
+```bash
+docker compose up --build
+```
+
+Sau khi các healthcheck đạt:
+
+- Web: `http://localhost:3000`
+- API live: `http://localhost:4000/health/live`
+- API ready: `http://localhost:4000/health/ready`
+- PostgreSQL: `localhost:5432`
+
+Stack development mặc định dùng bộ phân loại heuristic để chạy hoàn toàn local.
+Muốn dùng AI thật, sao chép `.env.example` thành `.env` và cấu hình một trong:
+
+```env
+SENTIMENT_PROVIDER=ollama
+SENTIMENT_MODEL=<model-name>
+SENTIMENT_BASE_URL=http://ollama:11434
+```
+
+hoặc:
+
+```env
+SENTIMENT_PROVIDER=openai-compatible
+SENTIMENT_MODEL=<model-name>
+SENTIMENT_BASE_URL=https://<provider>/v1
+SENTIMENT_API_KEY=<set-locally>
+```
+
+Không commit `.env` hoặc secret.
+
+## Chạy từng phần khi phát triển
+
+Yêu cầu Node.js `>=22.13`.
+
+```bash
+npm install
+npm install --prefix services/api
+npm install --prefix services/worker
+npm install --prefix apps/extension
+
+npm run dev
+npm run dev:api
+npm run dev:worker
+npm run dev:extension
+```
+
+API cần PostgreSQL và schema:
+
+```bash
+npm run db:migrate --prefix services/api
+npm run db:seed --prefix services/api
+```
+
+## Cài Chrome Extension
+
+```bash
+npm run build --prefix apps/extension
+```
+
+1. Mở `chrome://extensions`.
+2. Bật **Developer mode**.
+3. Chọn **Load unpacked** và trỏ tới `apps/extension/dist`.
+4. Tại `Settings > Facebook` trên web, tạo mã ghép.
+5. Mở popup extension, nhập API URL và mã ghép.
+
+Extension chỉ dùng phiên Facebook đang đăng nhập sẵn trong Chrome. Nó không đọc
+hoặc gửi password, cookie hay session token về backend. Nó không nhập nội dung,
+không Like, không đăng bài và không gửi comment; chỉ click allowlist nút xem
+thêm/tải thêm comment và chọn `Tất cả bình luận`. Mỗi run sở hữu tối đa một tab Facebook nền, dùng lại tab
+đó cho các bước và đóng trong mọi trạng thái kết thúc. Nếu gặp login,
+checkpoint, 2FA hoặc CAPTCHA, run dừng an toàn thay vì tìm cách vượt qua.
+
+Crawler cố mở rộng toàn bộ comment/reply quan sát được trong giới hạn đã cấu
+hình. Chỉ khi DOM có marker kết thúc chính xác mới báo coverage `complete`; nếu
+không chứng minh được điểm cuối hoặc chạm giới hạn, job báo `unknown/partial`
+thay vì khẳng định sai là đã lấy hết.
+
+DOM Facebook thay đổi theo tài khoản, ngôn ngữ và rollout. Fixture tests bảo vệ
+các selector/flow hiện có; trước production vẫn phải UAT thủ công trên các group
+được phép và cập nhật adapter khi markup thay đổi.
+
+## Quyền riêng tư tác giả
+
+Hệ thống chỉ chấp nhận ba trường:
+
+```json
+{
+  "authorName": "Nguyễn An",
+  "isAnonymous": false,
+  "authorKind": "real"
+}
+```
+
+Với bài/comment ẩn danh, `authorName` bắt buộc là `null` và
+`authorKind = "anonymous"`. Contract, extension, API và constraint PostgreSQL
+đều từ chối platform author ID, profile URL, username, handle hoặc avatar URL.
+UI hiển thị tên dưới dạng text, không tạo link profile. Xem
+`docs/AUTHOR_PRIVACY.md`.
+
+URL nguồn/group/post/comment vẫn được phép vì đó là link nội dung, không phải
+link hồ sơ người dùng; query tracking như `fbclid` và `utm_*` được loại bỏ.
+
+## Luồng Facebook
+
+1. Web tạo pairing code; extension ghép thiết bị và gửi heartbeat.
+2. `Lấy danh sách group` tạo discovery job.
+3. Extension claim lease, mở một tab nền, đọc group đã join và gửi batch.
+4. Người dùng tick group, chỉnh keyword và khoảng `hôm nay / 3 / 7 / 30 ngày`.
+5. Crawl job tìm post khớp keyword, lưu metadata bài cha rồi lấy comment/reply.
+6. API kiểm lại source/task/window và keyword từ snapshot, upsert chống trùng,
+   rồi chỉ đẩy comment/reply vào sentiment queue.
+7. Worker phân loại comment; dashboard đọc PostgreSQL và refresh mỗi 5 giây.
+
+Bốn keyword seed mặc định: `VSF`, `vinsmart Future`, `Vinfuture`, `Vin Future`.
+
+## Kiểm tra
+
+```bash
+npm run test:all
+npm run build:all
+docker compose config
+```
+
+Sau khi stack Docker đang chạy, kiểm tra xuyên suốt API/PostgreSQL/worker bằng:
+
+```powershell
+./scripts/smoke-e2e.ps1
+```
+
+Script từ chối URL không phải HTTP local, khôi phục Settings/lựa chọn group và
+thu hồi thiết bị test khi kết thúc. Các post/comment có tiền tố `smoke-` được
+giữ lại trong database development để đối chiếu dashboard.
+
+Các test bao gồm:
+
+- server-render ba route web;
+- keyword, privacy contract, idempotency và API validation;
+- post context + comment ingest cho tác giả thật và ẩn danh;
+- sentiment schema/hash/provider fallback;
+- Facebook DOM fixture, post/comment/reply, anonymous detection;
+- single-tab ownership, cleanup và payload privacy.
+- read-only guard: không auto post, auto-comment, Like hoặc Share.
+
+## Lưu ý vận hành
+
+- Chỉ crawl dữ liệu tài khoản hiện tại có quyền xem và đã được chủ dự án cho
+  phép.
+- Không dùng để né rate limit, checkpoint, CAPTCHA hoặc cơ chế bảo vệ nền tảng.
+- Kết quả là nội dung quan sát được qua UI tại thời điểm crawl, không phải cam
+  kết bao phủ 100% dữ liệu Facebook.
+- Post chỉ là context/metadata; KPI và sentiment listening chỉ tính
+  comment/reply.
+- Frontend có demo fallback minh bạch khi API offline; dữ liệu thật chỉ xuất
+  hiện khi API/PostgreSQL/extension đang chạy.
+- Trước production cần chốt retention, quyền truy cập, điều khoản nền tảng,
+  backup/restore và UAT trên tài khoản thử nghiệm được phép.
