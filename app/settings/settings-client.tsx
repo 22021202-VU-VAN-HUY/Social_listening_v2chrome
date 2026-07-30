@@ -4,7 +4,6 @@ import {
   useCallback,
   useEffect,
   useMemo,
-  useRef,
   useState,
 } from "react";
 import {
@@ -27,6 +26,7 @@ type Platform = "facebook" | "tiktok" | "threads";
 type DataMode = "live" | "offline" | "degraded";
 
 type ExtensionStatus = {
+  deviceId: string | null;
   state: "unpaired" | "online" | "offline" | "crawling" | "needs-login";
   version: string;
   heartbeatAt: string | null;
@@ -49,7 +49,6 @@ type Keyword = {
   value: string;
   enabled: boolean;
   matchType: "whole_word" | "contains_phrase";
-  demo?: boolean;
 };
 
 type CrawlSettings = {
@@ -61,82 +60,32 @@ type CrawlSettings = {
   enabled: boolean;
 };
 
-const DEFAULT_KEYWORDS: Keyword[] = [
-  {
-    id: "demo-keyword-vsf",
-    value: "VSF",
-    enabled: true,
-    matchType: "whole_word",
-    demo: true,
-  },
-  {
-    id: "demo-keyword-vinsmart-future",
-    value: "vinsmart Future",
-    enabled: true,
-    matchType: "contains_phrase",
-    demo: true,
-  },
-  {
-    id: "demo-keyword-vinfuture",
-    value: "Vinfuture",
-    enabled: true,
-    matchType: "whole_word",
-    demo: true,
-  },
-  {
-    id: "demo-keyword-vin-future",
-    value: "Vin Future",
-    enabled: true,
-    matchType: "contains_phrase",
-    demo: true,
-  },
-];
+const MIN_EXTENSION_VERSION = [0, 1, 1] as const;
 
-const DEMO_GROUPS: GroupSource[] = [
-  {
-    id: "demo-group-tech",
-    name: "Cộng đồng Công nghệ Việt",
-    url: "https://www.facebook.com/groups/",
-    selected: true,
-    active: true,
-    discoveredAt: "2026-07-30T08:40:00+07:00",
-    lastError: null,
-  },
-  {
-    id: "demo-group-science",
-    name: "Khoa học & Đổi mới",
-    url: "https://www.facebook.com/groups/",
-    selected: true,
-    active: true,
-    discoveredAt: "2026-07-30T08:40:00+07:00",
-    lastError: null,
-  },
-  {
-    id: "demo-group-ai",
-    name: "Chuyện AI Việt Nam",
-    url: "https://www.facebook.com/groups/",
-    selected: false,
-    active: true,
-    discoveredAt: "2026-07-30T08:39:00+07:00",
-    lastError: null,
-  },
-  {
-    id: "demo-group-innovation",
-    name: "Đổi mới sáng tạo Việt Nam",
-    url: "https://www.facebook.com/groups/",
-    selected: false,
-    active: true,
-    discoveredAt: "2026-07-30T08:39:00+07:00",
-    lastError: null,
-  },
-];
+function isCompatibleExtensionVersion(value: string): boolean {
+  const parts = value
+    .split(".")
+    .slice(0, 3)
+    .map((part) => Number.parseInt(part, 10));
+  if (parts.length !== 3 || parts.some((part) => !Number.isFinite(part))) {
+    return false;
+  }
+  for (let index = 0; index < MIN_EXTENSION_VERSION.length; index += 1) {
+    const current = parts[index] ?? 0;
+    const required = MIN_EXTENSION_VERSION[index] ?? 0;
+    if (current > required) return true;
+    if (current < required) return false;
+  }
+  return true;
+}
 
 const OFFLINE_EXTENSION: ExtensionStatus = {
+  deviceId: null,
   state: "offline",
   version: "—",
   heartbeatAt: null,
   deviceName: "Chưa nhận diện",
-  compatible: true,
+  compatible: false,
 };
 
 function normalizeExtension(value: unknown): ExtensionStatus {
@@ -155,9 +104,11 @@ function normalizeExtension(value: unknown): ExtensionStatus {
   if (["needs-login", "need-login", "login-required"].includes(rawState)) {
     state = "needs-login";
   }
+  const version = asString(record.version ?? record.extensionVersion, "—");
   return {
+    deviceId: asString(record.id ?? record.deviceId ?? record.device_id) || null,
     state,
-    version: asString(record.version ?? record.extensionVersion, "—"),
+    version,
     heartbeatAt:
       asString(
           record.heartbeatAt ??
@@ -172,7 +123,7 @@ function normalizeExtension(value: unknown): ExtensionStatus {
     ),
     compatible: asBoolean(
       record.compatible ?? record.isCompatible ?? record.is_compatible,
-      true,
+      isCompatibleExtensionVersion(version),
     ),
   };
 }
@@ -326,7 +277,7 @@ export function SettingsClient() {
   } | null>(null);
   const [pairingCode, setPairingCode] = useState("");
   const [pairingExpiry, setPairingExpiry] = useState("");
-  const loaded = useRef(false);
+  const [discoveryJobId, setDiscoveryJobId] = useState("");
 
   const loadSettings = useCallback(async () => {
     const [extensionResult, groupsResult, keywordsResult, settingsResult] =
@@ -347,13 +298,11 @@ export function SettingsClient() {
     if (!successCount) {
       setMode("offline");
       setNotice(
-        "API chưa phản hồi. Group và từ khóa dưới đây là dữ liệu minh họa; thay đổi chưa được lưu.",
+        "Không kết nối được API. Không có dữ liệu giả được hiển thị; hãy chạy Docker backend rồi thử lại.",
       );
       setExtension(OFFLINE_EXTENSION);
-      if (!loaded.current) {
-        setGroups(DEMO_GROUPS);
-        setKeywords(DEFAULT_KEYWORDS);
-      }
+      setGroups([]);
+      setKeywords([]);
     } else {
       setMode(successCount === 4 ? "live" : "degraded");
       setNotice(
@@ -382,7 +331,6 @@ export function SettingsClient() {
         setSettings(normalizeSettings(settingsResult.value));
       }
     }
-    loaded.current = true;
   }, []);
 
   const refreshExtension = useCallback(async () => {
@@ -398,6 +346,77 @@ export function SettingsClient() {
     }
   }, []);
 
+  const refreshDiscoveryJob = useCallback(
+    async (jobId: string) => {
+      try {
+        const [jobResponse, groupsResponse] = await Promise.all([
+          apiRequest<unknown>(`/jobs/${encodeURIComponent(jobId)}`),
+          apiRequest<unknown>("/sources?platform=facebook"),
+        ]);
+        const latestGroups = unwrapItems(groupsResponse)
+          .map(normalizeGroup)
+          .filter((group): group is GroupSource => group !== null);
+        setGroups(latestGroups);
+
+        const job = asRecord(jobResponse);
+        const progress = asRecord(job.progress);
+        const status = asString(job.status, "waiting_extension");
+        const sourcesDone = asNumber(
+          progress.sourcesDone ?? progress.sources_done,
+          latestGroups.length,
+        );
+
+        if (status === "completed" || status === "partial") {
+          setDiscoveryJobId("");
+          setBusyAction("");
+          setFeedback({
+            type: status === "completed" ? "success" : "info",
+            text:
+              status === "completed"
+                ? `Đã đọc xong ${latestGroups.length} group thật từ Facebook.`
+                : `Job hoàn tất một phần; hiện đọc được ${latestGroups.length} group. Xem trang Jobs để biết giới hạn gặp phải.`,
+          });
+          await loadSettings();
+          return;
+        }
+
+        if (
+          ["failed", "cancelled", "needs_login", "interrupted"].includes(status)
+        ) {
+          setDiscoveryJobId("");
+          setBusyAction("");
+          setFeedback({
+            type: "error",
+            text:
+              asString(job.errorMessage ?? job.error_message) ||
+              (status === "needs_login"
+                ? "Facebook yêu cầu đăng nhập lại. Mở tab Facebook, đăng nhập rồi chạy lại."
+                : `Job lấy group dừng ở trạng thái ${status}. Xem trang Jobs để biết chi tiết.`),
+          });
+          await loadSettings();
+          return;
+        }
+
+        setFeedback({
+          type: "info",
+          text:
+            status === "waiting_extension"
+              ? "Job thật đã được tạo. Đang chờ extension nhận lệnh; heartbeat có thể mất tối đa khoảng 30 giây."
+              : `Extension đang đọc danh sách group Facebook… đã nhận ${sourcesDone} group.`,
+        });
+      } catch (error) {
+        setFeedback({
+          type: "error",
+          text:
+            error instanceof Error
+              ? `Không đọc được tiến độ job: ${error.message}`
+              : "Không đọc được tiến độ job lấy group.",
+        });
+      }
+    },
+    [loadSettings],
+  );
+
   useEffect(() => {
     const initialLoad = window.setTimeout(() => void loadSettings(), 0);
     const interval = window.setInterval(
@@ -409,6 +428,22 @@ export function SettingsClient() {
       window.clearInterval(interval);
     };
   }, [loadSettings, refreshExtension]);
+
+  useEffect(() => {
+    if (!discoveryJobId) return;
+    const initial = window.setTimeout(
+      () => void refreshDiscoveryJob(discoveryJobId),
+      0,
+    );
+    const interval = window.setInterval(
+      () => void refreshDiscoveryJob(discoveryJobId),
+      3_000,
+    );
+    return () => {
+      window.clearTimeout(initial);
+      window.clearInterval(interval);
+    };
+  }, [discoveryJobId, refreshDiscoveryJob]);
 
   const filteredGroups = useMemo(() => {
     const query = groupQuery.trim().toLocaleLowerCase("vi-VN");
@@ -483,20 +518,53 @@ export function SettingsClient() {
   async function syncGroups() {
     setBusyAction("sync");
     setFeedback(null);
+    let jobStarted = false;
     try {
+      const extensionResponse = await apiRequest<unknown>("/extension/status");
+      const currentExtension = normalizeExtension(extensionResponse);
+      setExtension(currentExtension);
+      if (!currentExtension.deviceId || currentExtension.state === "unpaired") {
+        throw new Error(
+          "Chưa ghép extension. Hãy tạo mã ghép, nhập mã trong popup extension rồi thử lại.",
+        );
+      }
+      if (!currentExtension.compatible) {
+        throw new Error(
+          `Extension ${currentExtension.version} đã cũ. Mở chrome://extensions, bấm Reload cho Listening Social để dùng bản 0.1.1 rồi thử lại.`,
+        );
+      }
+      if (currentExtension.state === "offline") {
+        throw new Error(
+          "Extension đã ghép nhưng đang offline. Hãy mở Chrome và popup extension, kiểm tra API URL rồi bấm làm mới.",
+        );
+      }
+      if (currentExtension.state === "needs-login") {
+        throw new Error(
+          "Extension cần đăng nhập Facebook lại trước khi lấy danh sách group.",
+        );
+      }
+      if (currentExtension.state === "crawling") {
+        throw new Error(
+          "Extension đang chạy một job khác. Hãy chờ job đó kết thúc hoặc hủy tại trang Jobs.",
+        );
+      }
+
       const response = await apiRequest<unknown>("/jobs/discover-sources", {
         method: "POST",
-        body: JSON.stringify({ platform: "facebook" }),
+        body: JSON.stringify({
+          platform: "facebook",
+          deviceId: currentExtension.deviceId,
+        }),
       });
       const jobId = extractId(response);
-      if (jobId) saveActiveJobId(jobId);
+      if (!jobId) throw new Error("API không trả về ID của job lấy group.");
+      saveActiveJobId(jobId);
+      setDiscoveryJobId(jobId);
+      jobStarted = true;
       setFeedback({
-        type: "success",
-        text: jobId
-          ? "Đã giao job lấy group cho extension. Theo dõi tiến trình tại trang Jobs."
-          : "Đã gửi yêu cầu lấy danh sách group.",
+        type: "info",
+        text: "Job thật đã được tạo. Đang chờ extension nhận lệnh và mở một tab Facebook nền.",
       });
-      window.setTimeout(() => void loadSettings(), 2_000);
     } catch (error) {
       setFeedback({
         type: "error",
@@ -506,7 +574,7 @@ export function SettingsClient() {
             : "Không thể bắt đầu lấy danh sách group.",
       });
     } finally {
-      setBusyAction("");
+      if (!jobStarted) setBusyAction("");
     }
   }
 
@@ -593,14 +661,6 @@ export function SettingsClient() {
         item.id === keyword.id ? { ...item, enabled } : item,
       ),
     );
-    if (keyword.demo) {
-      setFeedback({
-        type: "info",
-        text: "Đây là dữ liệu minh họa; trạng thái chỉ thay đổi trên màn hình.",
-      });
-      return;
-    }
-
     try {
       await apiRequest<unknown>(`/keywords/${encodeURIComponent(keyword.id)}`, {
         method: "PATCH",
@@ -772,13 +832,25 @@ export function SettingsClient() {
               </div>
               <div>
                 <span>Tương thích API</span>
-                <strong className={extension.compatible ? "text-good" : "text-bad"}>
-                  {extension.compatible ? "Sẵn sàng" : "Cần cập nhật"}
+                <strong
+                  className={
+                    !extension.deviceId
+                      ? undefined
+                      : extension.compatible
+                        ? "text-good"
+                        : "text-bad"
+                  }
+                >
+                  {!extension.deviceId
+                    ? "Chưa kiểm tra"
+                    : extension.compatible
+                      ? "Sẵn sàng"
+                      : "Cần cập nhật"}
                 </strong>
               </div>
             </div>
 
-            {!extension.compatible && (
+            {extension.deviceId && !extension.compatible && (
               <p className="inline-warning">
                 Phiên bản extension hiện tại không tương thích API contract.
                 Hãy cập nhật trước khi crawl.
@@ -798,13 +870,10 @@ export function SettingsClient() {
                 className="button button-primary"
                 type="button"
                 onClick={() => void syncGroups()}
-                disabled={
-                  busyAction === "sync" ||
-                  !["online", "crawling"].includes(extension.state)
-                }
+                disabled={busyAction === "sync"}
               >
                 {busyAction === "sync"
-                  ? "Đang gửi yêu cầu…"
+                  ? "Đang lấy group thật…"
                   : "Lấy group đã tham gia"}
               </button>
             </div>

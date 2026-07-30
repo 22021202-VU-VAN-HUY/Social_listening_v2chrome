@@ -44,70 +44,9 @@ type ListeningJob = {
   createdAt: string | null;
   finishedAt: string | null;
   error: string | null;
-  demo?: boolean;
 };
 
 type DataMode = "live" | "offline" | "degraded";
-
-const DEMO_JOBS: ListeningJob[] = [
-  {
-    id: "demo-crawl-0730",
-    type: "crawl",
-    platform: "facebook",
-    status: "running",
-    step: "Đang đọc bình luận",
-    currentSource: "Cộng đồng Công nghệ Việt",
-    progress: 64,
-    postsScanned: 186,
-    postsMatched: 27,
-    commentsSaved: 214,
-    sentimentDone: 193,
-    sentimentTotal: 241,
-    heartbeatAt: "2026-07-30T09:12:42+07:00",
-    createdAt: "2026-07-30T08:51:10+07:00",
-    finishedAt: null,
-    error: null,
-    demo: true,
-  },
-  {
-    id: "demo-crawl-0729",
-    type: "crawl",
-    platform: "facebook",
-    status: "completed",
-    step: "Hoàn tất",
-    currentSource: "4 group đã xử lý",
-    progress: 100,
-    postsScanned: 342,
-    postsMatched: 51,
-    commentsSaved: 389,
-    sentimentDone: 440,
-    sentimentTotal: 440,
-    heartbeatAt: "2026-07-29T22:05:28+07:00",
-    createdAt: "2026-07-29T20:42:05+07:00",
-    finishedAt: "2026-07-29T22:05:28+07:00",
-    error: null,
-    demo: true,
-  },
-  {
-    id: "demo-discover-0728",
-    type: "discover-sources",
-    platform: "facebook",
-    status: "completed",
-    step: "Đã đồng bộ 12 group",
-    currentSource: "Danh sách group đã tham gia",
-    progress: 100,
-    postsScanned: 0,
-    postsMatched: 0,
-    commentsSaved: 0,
-    sentimentDone: 0,
-    sentimentTotal: 0,
-    heartbeatAt: "2026-07-28T17:18:45+07:00",
-    createdAt: "2026-07-28T17:17:21+07:00",
-    finishedAt: "2026-07-28T17:18:45+07:00",
-    error: null,
-    demo: true,
-  },
-];
 
 function normalizeStatus(value: unknown): JobStatus {
   const status = String(value ?? "queued")
@@ -296,10 +235,10 @@ export function JobsClient() {
         listResult.status === "rejected" &&
         (activeResult.status === "rejected" || !activeId)
       ) {
-        setJobs(DEMO_JOBS);
+        setJobs([]);
         setMode("offline");
         setNotice(
-          "API chưa phản hồi. Danh sách dưới đây là lịch sử minh họa, không phải job đang chạy thật.",
+          "API chưa phản hồi. Không hiển thị lịch sử giả; hãy chạy Docker backend rồi tải lại.",
         );
       } else {
         const list =
@@ -362,10 +301,6 @@ export function JobsClient() {
   }, [activeJob?.id, filter, jobs]);
 
   async function cancelJob(job: ListeningJob) {
-    if (job.demo) {
-      setFeedback("Đây là snapshot minh họa nên không có job thật để hủy.");
-      return;
-    }
     setCancelling(job.id);
     setFeedback("");
     try {
@@ -439,7 +374,7 @@ export function JobsClient() {
           {activeJob && (
             <span className={`job-status status-${activeJob.status}`}>
               <span aria-hidden="true" />
-              {activeJob.demo ? "Snapshot minh họa" : statusLabel(activeJob.status)}
+              {statusLabel(activeJob.status)}
             </span>
           )}
         </div>

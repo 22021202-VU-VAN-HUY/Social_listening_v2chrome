@@ -205,4 +205,59 @@ describe("TabLeaseManager", () => {
       manager.ensureOwnedTab("job-other-1234", "run-other-1234")
     ).rejects.toThrow(/another job/u);
   });
+
+  it("recovers once when Facebook replaces the page and closes the message channel", async () => {
+    class RedirectingTabs extends FakeTabs {
+      public discoverAttempts = 0;
+
+      public override async sendMessage(
+        tabId: number,
+        message: { type: string; runId?: string }
+      ): Promise<unknown> {
+        if (message.type === "DISCOVER_GROUPS") {
+          this.discoverAttempts += 1;
+          if (this.discoverAttempts === 1) {
+            throw new Error(
+              "A listener indicated an asynchronous response by returning true, but the message channel closed before a response was received"
+            );
+          }
+          return {
+            ok: true,
+            result: { sources: [], coverageStatus: "unknown" }
+          };
+        }
+        return super.sendMessage(tabId, message);
+      }
+    }
+
+    const memory = new MemoryStorage();
+    const storage = new ExtensionStorage(memory);
+    const fakeTabs = new RedirectingTabs();
+    const manager = new TabLeaseManager(
+      storage,
+      fakeTabs,
+      (runId) => `chrome-extension://test/runner.html#run=${runId}`
+    );
+    const record = runnerRecord();
+    await storage.saveRunner(record);
+    const tabId = await manager.ensureOwnedTab(record.jobId, record.runId);
+    await manager.waitUntilReady(tabId, record.runId);
+
+    const result = await manager.command<{
+      sources: unknown[];
+      coverageStatus: string;
+    }>(tabId, {
+      type: "DISCOVER_GROUPS",
+      runId: record.runId,
+      limits: {
+        maxGroups: 100,
+        maxScrollRounds: 10,
+        mutationWaitMs: 100
+      }
+    });
+
+    expect(result).toEqual({ sources: [], coverageStatus: "unknown" });
+    expect(fakeTabs.discoverAttempts).toBe(2);
+    expect(fakeTabs.createCalls).toBe(1);
+  });
 });

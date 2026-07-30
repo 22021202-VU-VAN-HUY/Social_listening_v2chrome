@@ -1,10 +1,11 @@
 const DEFAULT_API_BASE_URL =
-  import.meta.env["VITE_API_BASE_URL"]?.trim() || "http://localhost:8787";
+  import.meta.env["VITE_API_BASE_URL"]?.trim() ||
+  "http://localhost:4000/api/v1";
 
 const DEFAULT_WEB_ORIGINS = [
   "http://localhost",
   "http://127.0.0.1",
-  "https://listening-social.example.com"
+  "https://listening-socialmediav2.m-ilestyler431554.chatgpt.site"
 ] as const;
 
 export function normalizeApiBaseUrl(input: string): string {

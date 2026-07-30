@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Listening Social Facebook Agent",
   "description": "Thu thập group, bài viết và bình luận Facebook theo job do Listening Social điều phối.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "minimum_chrome_version": "120",
   "action": {
     "default_title": "Listening Social",
@@ -21,7 +21,7 @@
     "https://web.facebook.com/*",
     "http://localhost/*",
     "http://127.0.0.1/*",
-    "https://listening-social.example.com/*"
+    "https://listening-socialmediav2.m-ilestyler431554.chatgpt.site/*"
   ],
   "content_scripts": [
     {
@@ -41,7 +41,7 @@
     "matches": [
       "http://localhost/*",
       "http://127.0.0.1/*",
-      "https://listening-social.example.com/*"
+      "https://listening-socialmediav2.m-ilestyler431554.chatgpt.site/*"
     ]
   },
   "content_security_policy": {

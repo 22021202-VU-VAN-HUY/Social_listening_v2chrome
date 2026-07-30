@@ -46,7 +46,7 @@ services:
       DEVICE_ONLINE_SECONDS: 60
       LEASE_TTL_SECONDS: 45
       ADAPTER_VERSION: facebook-dom-v1
-      CORS_ORIGINS: "http://localhost:3000,http://127.0.0.1:3000,http://localhost:${WEB_PORT:-3000},http://127.0.0.1:${WEB_PORT:-3000}"
+      CORS_ORIGINS: "http://localhost:3000,http://127.0.0.1:3000,http://localhost:${WEB_PORT:-3000},http://127.0.0.1:${WEB_PORT:-3000},https://listening-socialmediav2.m-ilestyler431554.chatgpt.site"
     ports:
       - "4000:4000"
     depends_on:

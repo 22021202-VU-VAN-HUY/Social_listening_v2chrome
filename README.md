@@ -99,6 +99,10 @@ npm run build --prefix apps/extension
 4. Tại `Settings > Facebook` trên web, tạo mã ghép.
 5. Mở popup extension, nhập API URL và mã ghép.
 
+Sau mỗi lần build extension mới, bấm **Reload** tại `chrome://extensions`.
+Phiên bản hiện tại là `0.1.1` và API mặc định phải là
+`http://localhost:4000/api/v1`.
+
 Extension chỉ dùng phiên Facebook đang đăng nhập sẵn trong Chrome. Nó không đọc
 hoặc gửi password, cookie hay session token về backend. Nó không nhập nội dung,
 không Like, không đăng bài và không gửi comment; chỉ click allowlist nút xem
@@ -186,7 +190,7 @@ Các test bao gồm:
   kết bao phủ 100% dữ liệu Facebook.
 - Post chỉ là context/metadata; KPI và sentiment listening chỉ tính
   comment/reply.
-- Frontend có demo fallback minh bạch khi API offline; dữ liệu thật chỉ xuất
-  hiện khi API/PostgreSQL/extension đang chạy.
+- Frontend không tạo dữ liệu demo khi API offline; màn hình để trống và báo lỗi
+  kết nối. Dữ liệu chỉ xuất hiện từ API/PostgreSQL/extension thật.
 - Trước production cần chốt retention, quyền truy cập, điều khoản nền tảng,
   backup/restore và UAT trên tài khoản thử nghiệm được phép.

@@ -89,7 +89,7 @@ export function DataNotice({
             ? "Dữ liệu trực tiếp"
             : mode === "degraded"
               ? "Kết nối chưa đầy đủ"
-              : "Đang xem dữ liệu minh họa"}
+              : "API đang ngoại tuyến"}
         </strong>
         <span>{message}</span>
       </div>

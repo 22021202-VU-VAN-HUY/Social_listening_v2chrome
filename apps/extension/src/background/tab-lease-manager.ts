@@ -12,6 +12,7 @@ export interface ManagedTab {
   url?: string;
   pendingUrl?: string;
   openerTabId?: number;
+  status?: "loading" | "complete" | "unloaded";
 }
 
 export interface TabsPort {
@@ -39,6 +40,7 @@ function chromeTabsPort(): TabsPort {
     if (tab.url !== undefined) managed.url = tab.url;
     if (tab.pendingUrl !== undefined) managed.pendingUrl = tab.pendingUrl;
     if (tab.openerTabId !== undefined) managed.openerTabId = tab.openerTabId;
+    if (tab.status !== undefined) managed.status = tab.status;
     return managed;
   };
   return {
@@ -61,6 +63,15 @@ function isMissingTabError(error: unknown): boolean {
   return (
     error instanceof Error &&
     /no tab with id|tab not found|invalid tab id/u.test(
+      error.message.toLocaleLowerCase("en-US")
+    )
+  );
+}
+
+function isTransientMessageChannelError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    /message channel closed|message port closed|receiving end does not exist|frame with id 0 was removed/u.test(
       error.message.toLocaleLowerCase("en-US")
     )
   );
@@ -181,12 +192,44 @@ export class TabLeaseManager {
     let lastError: unknown;
     while (Date.now() < deadline) {
       try {
+        const before = await this.tabs.get(tabId);
+        if (before.status && before.status !== "complete") {
+          await delay(250);
+          continue;
+        }
+        const beforeUrl = before.url ?? before.pendingUrl ?? "";
         const ping = (await this.tabs.sendMessage(tabId, {
           type: "PING"
         })) as ContentEnvelope;
         if (ping?.ok) {
-          await this.command(tabId, { type: "ASSIGN_RUN", runId });
-          return;
+          const assigned = (await this.tabs.sendMessage(tabId, {
+            type: "ASSIGN_RUN",
+            runId
+          })) as ContentEnvelope;
+          if (assigned?.ok) {
+            // Facebook can answer at document_idle and immediately replace the
+            // SPA page. Require a short stable interval before starting the
+            // longer discovery/crawl command.
+            await delay(500);
+            const after = await this.tabs.get(tabId);
+            const afterUrl = after.url ?? after.pendingUrl ?? "";
+            if (
+              (!after.status || after.status === "complete") &&
+              beforeUrl === afterUrl
+            ) {
+              const confirmed = (await this.tabs.sendMessage(tabId, {
+                type: "PING"
+              })) as ContentEnvelope;
+              if (confirmed?.ok) return;
+            }
+            lastError = new Error(
+              "Facebook replaced the page while the content channel was starting."
+            );
+            continue;
+          }
+          lastError = new Error(
+            assigned?.error ?? "Facebook content ownership assignment failed."
+          );
         }
       } catch (error) {
         lastError = error;
@@ -201,14 +244,32 @@ export class TabLeaseManager {
   }
 
   public async command<T>(tabId: number, command: ContentCommand): Promise<T> {
-    const envelope = (await this.tabs.sendMessage(
-      tabId,
-      command
-    )) as ContentEnvelope;
-    if (!envelope || envelope.ok !== true) {
-      throw new Error(envelope?.error ?? "Facebook content command failed.");
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        const envelope = (await this.tabs.sendMessage(
+          tabId,
+          command
+        )) as ContentEnvelope;
+        if (!envelope || envelope.ok !== true) {
+          throw new Error(envelope?.error ?? "Facebook content command failed.");
+        }
+        return envelope.result as T;
+      } catch (error) {
+        if (attempt > 0 || !isTransientMessageChannelError(error)) {
+          throw error;
+        }
+        const record = await this.storage.getRunner();
+        if (!record?.runId || record.tabId !== tabId) {
+          throw error;
+        }
+        // Facebook occasionally replaces the page while a command is starting.
+        // Re-establish the read-only content channel once, then replay the
+        // idempotent command. Never open a second tab for this recovery.
+        await delay(500);
+        await this.waitUntilReady(tabId, record.runId);
+      }
     }
-    return envelope.result as T;
+    throw new Error("Facebook content command failed after channel recovery.");
   }
 
   private async verifyOwnership(

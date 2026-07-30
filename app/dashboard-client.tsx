@@ -81,157 +81,9 @@ type ActiveJob = {
   sentimentTotal: number;
   heartbeatAt: string | null;
   error: string | null;
-  demo?: boolean;
 };
 
 type DataMode = "live" | "offline" | "degraded";
-
-const DEMO_ITEMS: CommentItem[] = [
-  {
-    id: "demo-comment-01",
-    platform: "facebook",
-    source: "Khoa học & Đổi mới",
-    authorName: null,
-    anonymous: true,
-    content:
-      "Có lịch chi tiết cho chuỗi tọa đàm Vin Future chưa nhỉ? Mình muốn theo dõi trực tuyến.",
-    sentiment: "neutral",
-    confidence: 0.88,
-    commentPublishedAt: "2026-07-30T08:16:00+07:00",
-    commentCollectedAt: "2026-07-30T08:18:00+07:00",
-    commentTimeParseStatus: "parsed",
-    originalUrl: null,
-    parentCommentId: null,
-    postId: "demo-parent-01",
-    postContext:
-      "Lịch hoạt động và tọa đàm khoa học trong khuôn khổ VinFuture",
-    postPublishedAt: "2026-07-30T07:40:00+07:00",
-    postCollectedAt: "2026-07-30T08:11:00+07:00",
-    postTimeParseStatus: "parsed",
-    postAuthorName: "Ban tổ chức sự kiện",
-    postAnonymous: false,
-    postUrl: null,
-    keywords: ["Vin Future"],
-  },
-  {
-    id: "demo-comment-02",
-    platform: "facebook",
-    source: "Chuyện AI Việt Nam",
-    authorName: "Hà Phương",
-    anonymous: false,
-    content:
-      "Nội dung đáng quan tâm nhưng thông báo lịch sự kiện hơi chậm, khó chủ động sắp xếp thời gian.",
-    sentiment: "negative",
-    confidence: 0.79,
-    commentPublishedAt: "2026-07-30T07:51:00+07:00",
-    commentCollectedAt: "2026-07-30T07:56:00+07:00",
-    commentTimeParseStatus: "parsed",
-    originalUrl: null,
-    parentCommentId: null,
-    postId: "demo-parent-02",
-    postContext:
-      "Thảo luận về truyền thông và khả năng tiếp cận các chương trình VinFuture",
-    postPublishedAt: "2026-07-29T22:34:00+07:00",
-    postCollectedAt: "2026-07-30T07:45:00+07:00",
-    postTimeParseStatus: "parsed",
-    postAuthorName: "Tuấn Khoa",
-    postAnonymous: false,
-    postUrl: null,
-    keywords: ["Vinfuture"],
-  },
-  {
-    id: "demo-reply-01",
-    platform: "facebook",
-    source: "Chuyện AI Việt Nam",
-    authorName: "Minh Anh",
-    anonymous: false,
-    content:
-      "Mình đồng ý, nếu có thông báo sớm hơn thì sinh viên ở xa cũng dễ tham gia hơn.",
-    sentiment: "positive",
-    confidence: 0.91,
-    commentPublishedAt: "2026-07-30T08:03:00+07:00",
-    commentCollectedAt: "2026-07-30T08:08:00+07:00",
-    commentTimeParseStatus: "parsed",
-    originalUrl: null,
-    parentCommentId: "demo-comment-02",
-    postId: "demo-parent-02",
-    postContext:
-      "Thảo luận về truyền thông và khả năng tiếp cận các chương trình VinFuture",
-    postPublishedAt: "2026-07-29T22:34:00+07:00",
-    postCollectedAt: "2026-07-30T07:45:00+07:00",
-    postTimeParseStatus: "parsed",
-    postAuthorName: "Tuấn Khoa",
-    postAnonymous: false,
-    postUrl: null,
-    keywords: ["Vinfuture"],
-  },
-  {
-    id: "demo-comment-03",
-    platform: "facebook",
-    source: "Cộng đồng Công nghệ Việt",
-    authorName: null,
-    anonymous: false,
-    content:
-      "Mình thấy từ khóa VSF xuất hiện trong bài, không rõ có phải đang nhắc cùng chương trình không.",
-    sentiment: "neutral",
-    confidence: 0.58,
-    commentPublishedAt: null,
-    commentCollectedAt: "2026-07-29T21:10:00+07:00",
-    commentTimeParseStatus: "unknown",
-    originalUrl: null,
-    parentCommentId: null,
-    postId: "demo-parent-03",
-    postContext: "Tổng hợp các giải thưởng khoa học quốc tế đáng chú ý",
-    postPublishedAt: "2026-07-29T19:42:00+07:00",
-    postCollectedAt: "2026-07-29T20:05:00+07:00",
-    postTimeParseStatus: "parsed",
-    postAuthorName: null,
-    postAnonymous: true,
-    postUrl: null,
-    keywords: ["VSF"],
-  },
-  {
-    id: "demo-reply-02",
-    platform: "facebook",
-    source: "Cộng đồng Công nghệ Việt",
-    authorName: "Quang Huy",
-    anonymous: false,
-    content:
-      "Bài này đang nói tới VinFuture, phần viết tắt trong ảnh có thể khiến mọi người nhầm.",
-    sentiment: "neutral",
-    confidence: 0.76,
-    commentPublishedAt: "2026-07-29T21:26:00+07:00",
-    commentCollectedAt: "2026-07-29T21:30:00+07:00",
-    commentTimeParseStatus: "parsed",
-    originalUrl: null,
-    parentCommentId: "demo-comment-03",
-    postId: "demo-parent-03",
-    postContext: "Tổng hợp các giải thưởng khoa học quốc tế đáng chú ý",
-    postPublishedAt: "2026-07-29T19:42:00+07:00",
-    postCollectedAt: "2026-07-29T20:05:00+07:00",
-    postTimeParseStatus: "parsed",
-    postAuthorName: null,
-    postAnonymous: true,
-    postUrl: null,
-    keywords: ["VSF", "VinFuture"],
-  },
-];
-
-const DEMO_JOB: ActiveJob = {
-  id: "demo-crawl-0726",
-  status: "running",
-  step: "Đang thu thập bình luận và phản hồi",
-  currentSource: "Cộng đồng Công nghệ Việt",
-  progress: 64,
-  postsScanned: 186,
-  postsMatched: 27,
-  commentsSaved: 214,
-  sentimentDone: 193,
-  sentimentTotal: 241,
-  heartbeatAt: "2026-07-30T09:12:42+07:00",
-  error: null,
-  demo: true,
-};
 
 function sentimentOf(value: unknown): Sentiment | null {
   if (value === null || value === undefined || value === "") return null;
@@ -741,12 +593,12 @@ export function DashboardClient() {
       ).length;
 
       if (dataFailures === dataResults.length) {
-        setSnapshot(buildSnapshot(DEMO_ITEMS));
+        setSnapshot(buildSnapshot([]));
         setMode("offline");
         setMessage(
-          "API chưa phản hồi. Bình luận và số liệu bên dưới là snapshot minh họa, không phải dữ liệu crawl thật.",
+          "API chưa phản hồi. Không hiển thị số liệu giả; hãy chạy Docker backend rồi tải lại.",
         );
-        setActiveJob(activeJobId ? DEMO_JOB : null);
+        setActiveJob(null);
       } else {
         const comments =
           commentsResult.status === "fulfilled"
@@ -1043,7 +895,7 @@ export function DashboardClient() {
           {activeJob && (
             <span className={`job-status status-${activeJob.status}`}>
               <span aria-hidden="true" />
-              {activeJob.demo ? "Snapshot minh họa" : activeJob.status}
+              {activeJob.status}
             </span>
           )}
         </div>

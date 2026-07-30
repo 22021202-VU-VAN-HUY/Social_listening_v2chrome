@@ -12,9 +12,10 @@ npm run check
 
 Load the generated `dist/` directory from `chrome://extensions` in developer mode.
 
-The API URL is configured in the popup. Before production packaging, replace the
-placeholder production origins in `public/manifest.json` with the exact deployed
-web and API origins. Keep the requested host permissions as narrow as possible.
+The popup defaults to `http://localhost:4000/api/v1`, matching Docker Compose.
+The manifest allows only localhost and the deployed VinListen web origin. Keep
+the requested host permissions as narrow as possible when the deployment origin
+changes.
 
 ## Safety boundaries
 
