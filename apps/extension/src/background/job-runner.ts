@@ -341,8 +341,7 @@ export class JobRunner {
         ...lease,
         outcome: result.coverageStatus === "complete" ? "crawl_complete" : "partial",
         coverageStatus: result.coverageStatus,
-        ...(result.partialReason ? { partialReason: result.partialReason } : {}),
-        progress: { groupsDiscovered: result.sources.length }
+        ...(result.partialReason ? { partialReason: result.partialReason } : {})
       });
       return;
     }
@@ -574,8 +573,7 @@ export class JobRunner {
       ...lease,
       outcome: partial ? "partial" : "crawl_complete",
       coverageStatus: partial ? "partial" : "complete",
-      ...(partialReason ? { partialReason } : {}),
-      progress
+      ...(partialReason ? { partialReason } : {})
     });
   }
 

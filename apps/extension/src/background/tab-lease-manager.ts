@@ -31,6 +31,7 @@ export interface TabsPort {
   ): Promise<ManagedTab | undefined>;
   remove(tabId: number): Promise<void>;
   sendMessage(tabId: number, message: ContentCommand): Promise<unknown>;
+  injectContentScript(tabId: number): Promise<void>;
 }
 
 function chromeTabsPort(): TabsPort {
@@ -51,7 +52,13 @@ function chromeTabsPort(): TabsPort {
       return tab ? toManaged(tab) : undefined;
     },
     remove: async (tabId) => chrome.tabs.remove(tabId),
-    sendMessage: async (tabId, message) => chrome.tabs.sendMessage(tabId, message)
+    sendMessage: async (tabId, message) => chrome.tabs.sendMessage(tabId, message),
+    injectContentScript: async (tabId) => {
+      await chrome.scripting.executeScript({
+        target: { tabId },
+        files: ["assets/content-script.js"]
+      });
+    }
   };
 }
 
@@ -193,14 +200,21 @@ export class TabLeaseManager {
     while (Date.now() < deadline) {
       try {
         const before = await this.tabs.get(tabId);
-        if (before.status && before.status !== "complete") {
-          await delay(250);
-          continue;
-        }
         const beforeUrl = before.url ?? before.pendingUrl ?? "";
-        const ping = (await this.tabs.sendMessage(tabId, {
-          type: "PING"
-        })) as ContentEnvelope;
+        let ping: ContentEnvelope | null = null;
+        try {
+          ping = (await this.tabs.sendMessage(tabId, {
+            type: "PING"
+          })) as ContentEnvelope;
+        } catch {
+          // Declarative injection can be delayed indefinitely in a throttled
+          // background Facebook tab. Inject the read-only runner explicitly;
+          // the content script guards against duplicate registration.
+          await this.tabs.injectContentScript(tabId);
+          ping = (await this.tabs.sendMessage(tabId, {
+            type: "PING"
+          })) as ContentEnvelope;
+        }
         if (ping?.ok) {
           const assigned = (await this.tabs.sendMessage(tabId, {
             type: "ASSIGN_RUN",
@@ -214,7 +228,6 @@ export class TabLeaseManager {
             const after = await this.tabs.get(tabId);
             const afterUrl = after.url ?? after.pendingUrl ?? "";
             if (
-              (!after.status || after.status === "complete") &&
               beforeUrl === afterUrl
             ) {
               const confirmed = (await this.tabs.sendMessage(tabId, {

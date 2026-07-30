@@ -118,13 +118,21 @@ export class BackendApiClient {
           payload && typeof payload === "object"
             ? (payload as Record<string, unknown>)
             : {};
+        const nestedError =
+          details["error"] && typeof details["error"] === "object"
+            ? (details["error"] as Record<string, unknown>)
+            : {};
         const message =
           typeof details["message"] === "string"
             ? details["message"].slice(0, 300)
+            : typeof nestedError["message"] === "string"
+              ? nestedError["message"].slice(0, 300)
             : `Backend request failed (${String(response.status)}).`;
         const code =
           typeof details["code"] === "string"
             ? details["code"].slice(0, 80)
+            : typeof nestedError["code"] === "string"
+              ? nestedError["code"].slice(0, 80)
             : `HTTP_${String(response.status)}`;
         throw new ApiError(
           message,

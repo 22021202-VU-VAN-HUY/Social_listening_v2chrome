@@ -11,6 +11,7 @@ import {
   EmptyState,
 } from "../components/ui";
 import {
+  ApiError,
   apiRequest,
   asBoolean,
   asNumber,
@@ -60,7 +61,13 @@ type CrawlSettings = {
   enabled: boolean;
 };
 
-const MIN_EXTENSION_VERSION = [0, 1, 1] as const;
+const MIN_EXTENSION_VERSION = [0, 1, 2] as const;
+
+function apiErrorCode(error: ApiError): string {
+  const payload = asRecord(error.payload);
+  const nested = asRecord(payload.error);
+  return asString(payload.code ?? nested.code);
+}
 
 function isCompatibleExtensionVersion(value: string): boolean {
   const parts = value
@@ -530,7 +537,7 @@ export function SettingsClient() {
       }
       if (!currentExtension.compatible) {
         throw new Error(
-          `Extension ${currentExtension.version} đã cũ. Mở chrome://extensions, bấm Reload cho Listening Social để dùng bản 0.1.1 rồi thử lại.`,
+          `Extension ${currentExtension.version} đã cũ. Mở chrome://extensions, bấm Reload cho Listening Social để dùng bản 0.1.2 rồi thử lại.`,
         );
       }
       if (currentExtension.state === "offline") {
@@ -713,11 +720,28 @@ export function SettingsClient() {
       const jobId = extractId(response);
       if (!jobId) throw new Error("API không trả về ID của job crawl.");
       saveActiveJobId(jobId);
+      setExtension((current) => ({ ...current, state: "crawling" }));
       setFeedback({
         type: "success",
-        text: "Job crawl đã được tạo. Extension sẽ chỉ mở một tab Facebook và tự đóng khi hoàn tất.",
+        text: `Job crawl đã được tạo và chỉ lấy bài trong ${
+          settings.lookbackDays === 0
+            ? "hôm nay"
+            : `${settings.lookbackDays} ngày gần đây`
+        }. Extension sẽ chỉ mở một tab Facebook và tự đóng khi hoàn tất.`,
       });
     } catch (error) {
+      if (
+        error instanceof ApiError &&
+        error.status === 409 &&
+        apiErrorCode(error) === "DEVICE_ALREADY_BUSY"
+      ) {
+        setExtension((current) => ({ ...current, state: "crawling" }));
+        setFeedback({
+          type: "info",
+          text: "Một job Facebook đã chạy rồi, hệ thống không tạo job trùng. Theo dõi tiến độ tại trang Jobs.",
+        });
+        return;
+      }
       setFeedback({
         type: "error",
         text:

@@ -48,13 +48,21 @@ export async function apiRequest<T>(
       : await response.text();
 
     if (!response.ok) {
+      const payloadRecord =
+        typeof payload === "object" && payload !== null
+          ? (payload as Record<string, unknown>)
+          : {};
+      const nestedError =
+        typeof payloadRecord.error === "object" &&
+        payloadRecord.error !== null
+          ? (payloadRecord.error as Record<string, unknown>)
+          : {};
       const detail =
-        typeof payload === "object" &&
-        payload !== null &&
-        "message" in payload &&
-        typeof payload.message === "string"
-          ? payload.message
-          : `API trả về mã ${response.status}`;
+        typeof payloadRecord.message === "string"
+          ? payloadRecord.message
+          : typeof nestedError.message === "string"
+            ? nestedError.message
+            : `API trả về mã ${response.status}`;
       throw new ApiError(detail, response.status, payload);
     }
 

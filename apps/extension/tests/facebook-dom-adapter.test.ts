@@ -353,6 +353,25 @@ describe("FacebookDomAdapter", () => {
         entity.publishedAt !== null || entity.timeParseStatus === "unknown"
       ).toBe(true);
     }
+
+    const recentPosts = adapter.extractPosts({
+      sourceExternalId: "1",
+      keywords: [
+        {
+          id: "11111111-1111-4111-8111-111111111111",
+          value: "VSF",
+          matchMode: "whole_word"
+        }
+      ],
+      windowStartUtc: "2026-07-29T03:00:00.000Z",
+      windowEndUtc: now.toISOString(),
+      maxPosts: 10
+    });
+    expect(recentPosts.map((post) => post.externalId)).toEqual([
+      "post-absolute",
+      "post-relative",
+      "post-now"
+    ]);
   });
 
   it("parses only deterministic full Vietnamese and English Facebook aria timestamps", () => {

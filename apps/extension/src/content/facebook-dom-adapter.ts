@@ -497,8 +497,10 @@ function insideWindow(
   windowStartUtc: string | null,
   windowEndUtc: string | null
 ): boolean {
-  if (!publishedAt) return true;
+  const hasWindow = Boolean(windowStartUtc || windowEndUtc);
+  if (!publishedAt) return !hasWindow;
   const time = Date.parse(publishedAt);
+  if (!Number.isFinite(time)) return !hasWindow;
   if (windowStartUtc && time < Date.parse(windowStartUtc)) return false;
   if (windowEndUtc && time > Date.parse(windowEndUtc)) return false;
   return true;

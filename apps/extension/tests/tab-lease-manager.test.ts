@@ -77,6 +77,8 @@ class FakeTabs implements TabsPort {
     }
     return { ok: true, result: { runId: this.assignedRunId } };
   }
+
+  public async injectContentScript(): Promise<void> {}
 }
 
 function runnerRecord(): RunnerRecord {
@@ -258,6 +260,45 @@ describe("TabLeaseManager", () => {
 
     expect(result).toEqual({ sources: [], coverageStatus: "unknown" });
     expect(fakeTabs.discoverAttempts).toBe(2);
+    expect(fakeTabs.createCalls).toBe(1);
+  });
+
+  it("injects the read-only content runner when a background Facebook tab has no receiver", async () => {
+    class InjectionRequiredTabs extends FakeTabs {
+      public injections = 0;
+      private injected = false;
+
+      public override async injectContentScript(): Promise<void> {
+        this.injections += 1;
+        this.injected = true;
+      }
+
+      public override async sendMessage(
+        tabId: number,
+        message: { type: string; runId?: string }
+      ): Promise<unknown> {
+        if (!this.injected) {
+          throw new Error("Could not establish connection. Receiving end does not exist.");
+        }
+        return super.sendMessage(tabId, message);
+      }
+    }
+
+    const memory = new MemoryStorage();
+    const storage = new ExtensionStorage(memory);
+    const fakeTabs = new InjectionRequiredTabs();
+    const manager = new TabLeaseManager(
+      storage,
+      fakeTabs,
+      (runId) => `chrome-extension://test/runner.html#run=${runId}`
+    );
+    const record = runnerRecord();
+    await storage.saveRunner(record);
+
+    const tabId = await manager.ensureOwnedTab(record.jobId, record.runId);
+    await manager.waitUntilReady(tabId, record.runId);
+
+    expect(fakeTabs.injections).toBe(1);
     expect(fakeTabs.createCalls).toBe(1);
   });
 });

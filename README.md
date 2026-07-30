@@ -100,7 +100,7 @@ npm run build --prefix apps/extension
 5. Mở popup extension, nhập API URL và mã ghép.
 
 Sau mỗi lần build extension mới, bấm **Reload** tại `chrome://extensions`.
-Phiên bản hiện tại là `0.1.1` và API mặc định phải là
+Phiên bản hiện tại là `0.1.2` và API mặc định phải là
 `http://localhost:4000/api/v1`.
 
 Extension chỉ dùng phiên Facebook đang đăng nhập sẵn trong Chrome. Nó không đọc
