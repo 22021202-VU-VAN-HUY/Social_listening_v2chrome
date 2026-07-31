@@ -645,7 +645,7 @@ export class FacebookDomAdapter {
   public extractJoinedGroups(maxGroups = 500): SafeSourceDto[] {
     const roots = [
       ...this.document.querySelectorAll(
-        "[data-sl-joined-groups], nav[aria-label*='Groups'], nav[aria-label*='Nhóm'], [role='navigation']"
+        "[data-sl-joined-groups], main, [role='main']"
       )
     ];
     const scope = roots.length > 0 ? roots : [this.document.documentElement];
@@ -687,6 +687,24 @@ export class FacebookDomAdapter {
 
     assertPrivacySafePayload(groups);
     return groups;
+  }
+
+  public expectedJoinedGroupCount(): number | null {
+    for (const element of this.document.querySelectorAll(
+      "h1, h2, h3, [role='heading'], [data-sl-joined-groups-count]"
+    )) {
+      const label = normalizedLabel(
+        element.getAttribute("aria-label") ?? visibleText(element)
+      );
+      const match =
+        /tat ca cac nhom ban da tham gia\s*\((\d+)\)/u.exec(label) ??
+        /all (?:the )?groups you(?:'|’)ve joined\s*\((\d+)\)/u.exec(label);
+      const count = match?.[1] ? Number.parseInt(match[1], 10) : Number.NaN;
+      if (Number.isSafeInteger(count) && count >= 0 && count <= 10_000) {
+        return count;
+      }
+    }
+    return null;
   }
 
   private hasExactStatus(

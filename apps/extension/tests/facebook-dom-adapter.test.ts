@@ -64,6 +64,42 @@ describe("FacebookDomAdapter", () => {
     ]);
   });
 
+  it("reads the full joined-groups main list instead of the 10-item navigation", () => {
+    const joinedGroups = Array.from(
+      { length: 17 },
+      (_, index) =>
+        `<a href="/groups/joined-${index + 1}/">Nhóm đã tham gia ${index + 1}</a>`
+    ).join("");
+    const navigationGroups = Array.from(
+      { length: 10 },
+      (_, index) =>
+        `<a href="/groups/navigation-${index + 1}/">Nhóm navigation ${index + 1}</a>`
+    ).join("");
+    const dom = new JSDOM(
+      `
+        <nav aria-label="Nhóm">${navigationGroups}</nav>
+        <main>
+          <h2>Tất cả các nhóm bạn đã tham gia (17)</h2>
+          ${joinedGroups}
+        </main>
+      `,
+      { url: "https://www.facebook.com/groups/joins/" }
+    );
+    const adapter = new FacebookDomAdapter(
+      dom.window.document,
+      dom.window.location.href,
+      now
+    );
+
+    expect(adapter.expectedJoinedGroupCount()).toBe(17);
+    expect(adapter.extractJoinedGroups(50)).toHaveLength(17);
+    expect(
+      adapter
+        .extractJoinedGroups(50)
+        .every((group) => group.externalId.startsWith("joined-"))
+    ).toBe(true);
+  });
+
   it("extracts real post, comment and reply without identity links or IDs", () => {
     const dom = fixture(
       "post-real.html",

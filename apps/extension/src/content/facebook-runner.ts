@@ -298,10 +298,52 @@ export class FacebookContentRunner {
     if (signal.aborted) throw abortError();
     this.clickSafeControls(mode);
     const before = this.document.documentElement.scrollHeight;
+    const groupScroller =
+      mode === "groups" ? this.findJoinedGroupsScroller() : null;
+    const groupScrollTop = groupScroller?.scrollTop ?? 0;
+    if (groupScroller) {
+      const step = Math.max(groupScroller.clientHeight * 0.8, 600);
+      groupScroller.scrollTop = Math.min(
+        groupScroller.scrollHeight,
+        groupScroller.scrollTop + step
+      );
+      groupScroller.dispatchEvent(new Event("scroll"));
+    }
     this.win.scrollTo({ top: before, behavior: "auto" });
     const changed = await waitForMutation(this.document, timeoutMs, signal);
     const after = this.document.documentElement.scrollHeight;
-    return changed || after > before;
+    return (
+      changed ||
+      after > before ||
+      Boolean(groupScroller && groupScroller.scrollTop > groupScrollTop)
+    );
+  }
+
+  private findJoinedGroupsScroller(): HTMLElement | null {
+    const candidates = new Set<HTMLElement>();
+    for (const anchor of this.document.querySelectorAll(
+      "main a[href*='/groups/'], [role='main'] a[href*='/groups/']"
+    )) {
+      let ancestor = anchor.parentElement;
+      while (ancestor && ancestor !== this.document.body) {
+        if (
+          ancestor.scrollHeight > ancestor.clientHeight + 8 &&
+          ancestor.clientHeight > 0
+        ) {
+          candidates.add(ancestor);
+        }
+        ancestor = ancestor.parentElement;
+      }
+    }
+
+    return (
+      [...candidates].sort(
+        (left, right) =>
+          right.scrollHeight -
+          right.clientHeight -
+          (left.scrollHeight - left.clientHeight)
+      )[0] ?? null
+    );
   }
 
   private async discover(command: Extract<
@@ -312,16 +354,22 @@ export class FacebookContentRunner {
     const byId = new Map<string, SafeSourceDto>();
     let plateau = 0;
     let hitLimit = false;
+    let expectedCount: number | null = null;
 
     for (let round = 0; round < command.limits.maxScrollRounds; round += 1) {
       const before = byId.size;
-      for (const source of this.adapter().extractJoinedGroups(
+      const adapter = this.adapter();
+      expectedCount = adapter.expectedJoinedGroupCount() ?? expectedCount;
+      for (const source of adapter.extractJoinedGroups(
         command.limits.maxGroups
       )) {
         byId.set(source.externalId, source);
       }
       if (byId.size >= command.limits.maxGroups) {
         hitLimit = true;
+        break;
+      }
+      if (expectedCount !== null && byId.size >= expectedCount) {
         break;
       }
 
@@ -331,13 +379,17 @@ export class FacebookContentRunner {
         signal
       );
       plateau = byId.size === before && !changed ? plateau + 1 : 0;
-      if (plateau >= 2) break;
+      if (plateau >= 2 && expectedCount === null) break;
     }
 
-    const coverage = assessGroupListCoverage(
-      hitLimit,
-      this.adapter().hasExplicitGroupListEnd()
-    );
+    const expectedCountReached =
+      expectedCount !== null && byId.size >= expectedCount;
+    const coverage = expectedCountReached
+      ? { coverageStatus: "complete" as const }
+      : assessGroupListCoverage(
+          hitLimit,
+          this.adapter().hasExplicitGroupListEnd()
+        );
     const result: DiscoverGroupsResult = {
       sources: [...byId.values()],
       ...coverage
