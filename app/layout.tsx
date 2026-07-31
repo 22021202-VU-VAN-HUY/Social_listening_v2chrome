@@ -24,24 +24,28 @@ export async function generateMetadata(): Promise<Metadata> {
       ? "http"
       : "https");
   const origin = `${protocol}://${host}`;
-  const title = "VinListen — Social Listening cho VinFuture";
+  const title = "Social Listening — Vinsmart Future";
   const description =
-    "Theo dõi bình luận, phản hồi và sắc thái thảo luận về VinFuture trên mạng xã hội.";
+    "Theo dõi bình luận, phản hồi và sắc thái thảo luận về Vinsmart Future trên mạng xã hội.";
   const socialImage = `${origin}/og.png`;
 
   return {
     metadataBase: new URL(origin),
     title: {
       default: title,
-      template: "%s · VinListen",
+      template: "%s · Social Listening",
     },
     description,
-    applicationName: "VinListen",
-    keywords: ["VinFuture", "social listening", "Facebook", "sentiment"],
+    applicationName: "Social Listening",
+    keywords: ["Vinsmart Future", "social listening", "Facebook", "sentiment"],
+    icons: {
+      icon: "/social-listening-logo.png",
+      apple: "/social-listening-logo.png",
+    },
     openGraph: {
       type: "website",
       locale: "vi_VN",
-      siteName: "VinListen",
+      siteName: "Social Listening",
       title,
       description,
       images: [{ url: socialImage, width: 1200, height: 630, alt: title }],

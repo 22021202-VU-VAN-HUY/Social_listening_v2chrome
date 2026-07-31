@@ -1,6 +1,6 @@
 # listening_socialmediav2
 
-Ứng dụng social listening cho chủ đề VinSmart Future / VinFuture. Bản MVP thu
+Ứng dụng Social Listening cho chủ đề Vinsmart Future. Bản MVP thu
 thập comment/reply Facebook qua Chrome Extension; bài viết cha vẫn được lưu đủ
 metadata để lọc keyword và làm ngữ cảnh. Web là control plane để cấu hình, chạy
 job, theo dõi tiến độ mỗi 5 giây và xem sentiment comment

@@ -1,4 +1,4 @@
-# Listening Social Chrome Extension
+# Social Listening Chrome Extension
 
 Chrome Manifest V3 data-collection agent for the Facebook scope of
 `listening_socialmediav2`.
@@ -13,7 +13,7 @@ npm run check
 Load the generated `dist/` directory from `chrome://extensions` in developer mode.
 
 The popup defaults to `http://localhost:4000/api/v1`, matching Docker Compose.
-The manifest allows only localhost and the deployed VinListen web origin. Keep
+The manifest allows only localhost and the deployed Social Listening web origin. Keep
 the requested host permissions as narrow as possible when the deployment origin
 changes.
 

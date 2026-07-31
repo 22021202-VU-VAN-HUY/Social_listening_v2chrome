@@ -775,6 +775,78 @@ describe("FacebookDomAdapter", () => {
       }
     ]);
   });
+
+  it("uses visible reply targets to preserve flattened multi-level threads", () => {
+    const dom = new JSDOM(
+      `
+        <article data-sl-post>
+          <span data-sl-author>Người đăng bài</span>
+          <div data-sl-post-body>Vinsmart Future đang được thảo luận.</div>
+          <a href="/groups/1/posts/post-flat/">Bài viết</a>
+
+          <div data-sl-comment aria-label="Bình luận dưới tên Leo vào 3 giờ trước">
+            <span data-sl-comment-body>Bình luận gốc</span>
+            <a href="/groups/1/posts/post-flat/?comment_id=comment-root">3 giờ</a>
+          </div>
+          <div data-sl-comment aria-label="Bình luận dưới tên Gray Lobster vào 2 giờ trước">
+            <span data-sl-comment-body>
+              <a role="link">Leo</a> Phản hồi bậc một
+            </span>
+            <a href="/groups/1/posts/post-flat/?comment_id=comment-root&amp;reply_comment_id=reply-one">
+              2 giờ
+            </a>
+          </div>
+          <div data-sl-comment aria-label="Bình luận dưới tên Minh Anh vào 1 giờ trước">
+            <span data-sl-comment-body>
+              <a role="link">Gray Lobster</a> Phản hồi bậc hai
+            </span>
+            <a href="/groups/1/posts/post-flat/?comment_id=comment-root&amp;reply_comment_id=reply-two">
+              1 giờ
+            </a>
+          </div>
+        </article>
+      `,
+      { url: "https://www.facebook.com/groups/1/posts/post-flat/" }
+    );
+    const adapter = new FacebookDomAdapter(
+      dom.window.document,
+      dom.window.location.href,
+      now
+    );
+
+    const comments = adapter.extractComments({
+      postExternalId: "post-flat",
+      maxComments: 10
+    });
+
+    expect(
+      comments.map((comment) => ({
+        id: comment.externalId,
+        parent: comment.parentCommentExternalId,
+        order: comment.observedOrder,
+        author: comment.author.authorName
+      }))
+    ).toEqual([
+      {
+        id: "comment-root",
+        parent: null,
+        order: 0,
+        author: "Leo"
+      },
+      {
+        id: "reply-one",
+        parent: "comment-root",
+        order: 1,
+        author: "Gray Lobster"
+      },
+      {
+        id: "reply-two",
+        parent: "reply-one",
+        order: 2,
+        author: "Minh Anh"
+      }
+    ]);
+  });
 });
 
 describe("keyword and anonymous normalization", () => {

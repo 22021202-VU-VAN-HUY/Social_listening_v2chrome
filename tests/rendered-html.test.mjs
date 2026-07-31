@@ -40,7 +40,6 @@ function assertProductPage(html) {
     assert.doesNotMatch(html, marker);
   }
   assert.match(html, /lang="vi"/i);
-  assert.match(html, /VinListen/);
   assert.match(html, /Social Listening/);
 }
 
@@ -51,7 +50,7 @@ test("server-renders the Vietnamese dashboard", async () => {
 
   const html = await response.text();
   assertProductPage(html);
-  assert.match(html, /<title>Tổng quan · VinListen<\/title>/i);
+  assert.match(html, /<title>Tổng quan · Social Listening<\/title>/i);
   assert.match(html, /Đang dựng bức tranh thảo luận/i);
   assert.match(html, /Kết nối bình luận, phản hồi và AI sentiment/i);
 });
@@ -63,7 +62,7 @@ test("server-renders Facebook collection settings", async () => {
 
   const html = await response.text();
   assertProductPage(html);
-  assert.match(html, /<title>Thiết lập · VinListen<\/title>/i);
+  assert.match(html, /<title>Thiết lập · Social Listening<\/title>/i);
   assert.match(html, /Chọn đúng nguồn, nghe đúng tín hiệu/i);
   assert.match(html, /Facebook Extension/i);
   assert.match(html, /Group đã tham gia/i);
@@ -78,7 +77,7 @@ test("server-renders the jobs progress route", async () => {
 
   const html = await response.text();
   assertProductPage(html);
-  assert.match(html, /<title>Tiến trình · VinListen<\/title>/i);
+  assert.match(html, /<title>Tiến trình · Social Listening<\/title>/i);
   assert.match(html, /Đang đọc hàng đợi job/i);
   assert.match(html, /Kết nối extension, crawler và bộ phân loại sentiment/i);
 });

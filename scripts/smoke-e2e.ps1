@@ -89,7 +89,7 @@ $sourceAck = Invoke-JsonRequest -Method POST -Uri "$BaseUrl/extension/jobs/$($di
   sources = @(
     @{
       externalId = $sourceExternalId
-      name = "VinFuture smoke group"
+      name = "Vinsmart Future smoke group"
       canonicalUrl = "https://www.facebook.com/groups/$sourceExternalId/"
     }
   )

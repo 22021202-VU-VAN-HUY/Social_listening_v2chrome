@@ -35,6 +35,7 @@ type CommentItem = {
   commentTimeParseStatus: "parsed" | "unknown";
   originalUrl: string | null;
   parentCommentId: string | null;
+  observedOrder: number | null;
   postId: string;
   postContext: string;
   postPublishedAt: string | null;
@@ -106,6 +107,25 @@ function authorInitial(name: string | null, anonymous: boolean): string {
 function orderCommentThread(
   comments: CommentItem[],
 ): Array<{ item: CommentItem; depth: number }> {
+  const comparePosition = (left: CommentItem, right: CommentItem) => {
+    if (
+      left.observedOrder !== null &&
+      right.observedOrder !== null &&
+      left.observedOrder !== right.observedOrder
+    ) {
+      return left.observedOrder - right.observedOrder;
+    }
+    const leftTime = Date.parse(
+      left.commentPublishedAt ?? left.commentCollectedAt ?? "",
+    );
+    const rightTime = Date.parse(
+      right.commentPublishedAt ?? right.commentCollectedAt ?? "",
+    );
+    if (Number.isFinite(leftTime) && Number.isFinite(rightTime)) {
+      return leftTime - rightTime;
+    }
+    return left.id.localeCompare(right.id);
+  };
   const ids = new Set(comments.map((comment) => comment.id));
   const children = new Map<string, CommentItem[]>();
   const roots: CommentItem[] = [];
@@ -119,13 +139,17 @@ function orderCommentThread(
     siblings.push(comment);
     children.set(comment.parentCommentId, siblings);
   }
+  roots.sort(comparePosition);
+  for (const siblings of children.values()) {
+    siblings.sort(comparePosition);
+  }
 
   const ordered: Array<{ item: CommentItem; depth: number }> = [];
   const visited = new Set<string>();
   const append = (comment: CommentItem, depth: number) => {
     if (visited.has(comment.id)) return;
     visited.add(comment.id);
-    ordered.push({ item: comment, depth: Math.min(depth, 2) });
+    ordered.push({ item: comment, depth });
     for (const child of children.get(comment.id) ?? []) {
       append(child, depth + 1);
     }
@@ -349,6 +373,12 @@ function normalizeComment(value: unknown): CommentItem | null {
           record.parent_comment_id ??
           asRecord(record.parentComment).id,
       ) || null,
+    observedOrder: (() => {
+      const value = record.observedOrder ?? record.observed_order;
+      if (value === null || value === undefined || value === "") return null;
+      const parsed = Number(value);
+      return Number.isInteger(parsed) && parsed >= 0 ? parsed : null;
+    })(),
     postId,
     postContext,
     postPublishedAt:
@@ -868,7 +898,7 @@ export function DashboardClient() {
       <section className="page-intro">
         <div>
           <span className="section-kicker">Tín hiệu từ comment & reply</span>
-          <h2>Người dùng đang nói gì về VinFuture?</h2>
+          <h2>Người dùng đang nói gì về Vinsmart Future?</h2>
           <p>
             Bình luận và phản hồi là dữ liệu listening chính. Bài cha được lưu
             đầy đủ metadata/ngữ cảnh gồm nguồn, URL, nội dung, tác giả dạng
@@ -1259,11 +1289,14 @@ export function DashboardClient() {
                 <div className="facebook-comments">
                   {comments.map(({ item, depth }) => (
                     <div
-                      className={`facebook-comment${depth ? ` is-reply reply-depth-${Math.min(depth, 2)}` : ""}`}
+                      className={`facebook-comment${depth ? ` is-reply reply-depth-${depth}` : ""}`}
                       data-reply-depth={depth}
                       style={
                         depth
-                          ? { marginLeft: `${Math.min(depth, 2) * 34}px` }
+                          ? {
+                              marginLeft: `${Math.min(depth, 8) * 30}px`,
+                              ["--reply-depth" as string]: depth,
+                            }
                           : undefined
                       }
                       key={item.id}
@@ -1294,7 +1327,9 @@ export function DashboardClient() {
                           </div>
                         </div>
                         <div className="facebook-comment-actions">
-                          <span>{depth ? "Phản hồi" : "Bình luận"}</span>
+                          <span>
+                            {depth ? `Phản hồi bậc ${depth}` : "Bình luận"}
+                          </span>
                           <time>
                             {item.commentPublishedAt
                               ? formatDateTime(item.commentPublishedAt)

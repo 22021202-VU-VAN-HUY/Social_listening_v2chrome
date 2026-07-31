@@ -423,7 +423,7 @@ export async function ingestContentBatch(
       postId: string;
     }
   >();
-  for (const comment of batch.comments) {
+  for (const [commentIndex, comment] of batch.comments.entries()) {
     let post = postIds.get(comment.postExternalId);
     if (!post) {
       const result = await transaction.query<{ id: string; body: string }>(
@@ -494,11 +494,12 @@ export async function ingestContentBatch(
           author_name,
           is_anonymous,
           author_kind,
+          observed_order,
           content_hash
         )
         VALUES (
           $1, $2, $3, $3, 'facebook', $4, $5, $6, $7, $8, $9,
-          $10, $11, $12, $13
+          $10, $11, $12, $13, $14
         )
         ON CONFLICT (workspace_id, platform, external_id)
         DO UPDATE SET
@@ -512,6 +513,7 @@ export async function ingestContentBatch(
           author_name = EXCLUDED.author_name,
           is_anonymous = EXCLUDED.is_anonymous,
           author_kind = EXCLUDED.author_kind,
+          observed_order = EXCLUDED.observed_order,
           content_hash = EXCLUDED.content_hash,
           updated_at = now()
         RETURNING id
@@ -529,6 +531,7 @@ export async function ingestContentBatch(
         author.authorName,
         author.isAnonymous,
         author.authorKind,
+        comment.observedOrder ?? commentIndex,
         contentHash,
       ],
     );

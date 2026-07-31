@@ -214,6 +214,14 @@ function parseParentCommentExternalId(url: string): string | null {
   }
 }
 
+function parseThreadRootExternalId(url: string): string | null {
+  try {
+    return new URL(url).searchParams.get("comment_id");
+  } catch {
+    return null;
+  }
+}
+
 function fnv1a(value: string): string {
   let hash = 0x811c9dc5;
   for (let index = 0; index < value.length; index += 1) {
@@ -271,7 +279,7 @@ function findCommentBody(root: Element): string {
   return "";
 }
 
-function authorFromRoot(root: Element, comment: boolean): SafeAuthorDto {
+function authorCandidateFromRoot(root: Element, comment: boolean): string {
   const selectors = comment
     ? [
         "[data-sl-comment-author]",
@@ -315,7 +323,27 @@ function authorFromRoot(root: Element, comment: boolean): SafeAuthorDto {
     if (candidate) break;
   }
 
+  return candidate;
+}
+
+function authorFromRoot(root: Element, comment: boolean): SafeAuthorDto {
+  const candidate = authorCandidateFromRoot(root, comment);
   return makeSafeAuthor(candidate, isAnonymousAuthorLabel(candidate));
+}
+
+function replyTargetAuthorFromBody(root: Element): string {
+  for (const selector of [
+    "[data-sl-comment-body] a[role='link']",
+    "[data-testid='comment_body'] a[role='link']",
+    "span[lang] a[role='link']"
+  ]) {
+    for (const element of root.querySelectorAll(selector)) {
+      if (!isOwnedByCommentRoot(root, element)) continue;
+      const candidate = visibleText(element);
+      if (candidate) return candidate;
+    }
+  }
+  return "";
 }
 
 const ENGLISH_MONTH_INDEX = new Map<string, number>([
@@ -963,6 +991,7 @@ export class FacebookDomAdapter {
     const roots = this.findCommentRoots(options.postExternalId);
     const idsByElement = new Map<Element, string>();
     const urlsByElement = new Map<Element, string | null>();
+    const authorLabelsByElement = new Map<Element, string>();
 
     roots.forEach((root, index) => {
       const url = this.findCommentUrl(root);
@@ -980,18 +1009,25 @@ export class FacebookDomAdapter {
           `${options.postExternalId}|${author.authorName ?? "anonymous"}|${body}|${String(index)}`
         )}`;
       idsByElement.set(root, externalId.slice(0, 200));
+      authorLabelsByElement.set(
+        root,
+        normalizedLabel(authorCandidateFromRoot(root, true))
+      );
     });
 
-    for (const root of roots) {
+    for (const [rootIndex, root] of roots.entries()) {
       const externalId = idsByElement.get(root);
       if (!externalId || seen.has(externalId)) continue;
 
       const body = findCommentBody(root);
       if (!body) continue;
 
+      const url = urlsByElement.get(root) ?? null;
+      const urlParentCommentExternalId = url
+        ? parseParentCommentExternalId(url)
+        : null;
       let parentCommentExternalId =
         root.getAttribute("data-parent-comment-id") ?? null;
-      const url = urlsByElement.get(root) ?? null;
       if (!parentCommentExternalId) {
         let ancestor = root.parentElement;
         while (ancestor) {
@@ -1003,8 +1039,39 @@ export class FacebookDomAdapter {
           ancestor = ancestor.parentElement;
         }
       }
-      if (!parentCommentExternalId && url) {
-        parentCommentExternalId = parseParentCommentExternalId(url);
+
+      // Facebook often flattens every reply in a thread and keeps comment_id
+      // pointing at the top-level comment. The visible @name at the beginning
+      // of the reply is the only safe, name-only signal for the direct parent.
+      if (!parentCommentExternalId && urlParentCommentExternalId) {
+        const targetAuthor = normalizedLabel(replyTargetAuthorFromBody(root));
+        if (targetAuthor) {
+          for (let index = rootIndex - 1; index >= 0; index -= 1) {
+            const candidateRoot = roots[index];
+            const candidateUrl = candidateRoot
+              ? (urlsByElement.get(candidateRoot) ?? null)
+              : null;
+            const candidateId = candidateRoot
+              ? (idsByElement.get(candidateRoot) ?? null)
+              : null;
+            const belongsToThread =
+              candidateId === urlParentCommentExternalId ||
+              (candidateUrl !== null &&
+                parseThreadRootExternalId(candidateUrl) ===
+                  urlParentCommentExternalId);
+            if (
+              candidateRoot &&
+              belongsToThread &&
+              authorLabelsByElement.get(candidateRoot) === targetAuthor
+            ) {
+              parentCommentExternalId = candidateId;
+              break;
+            }
+          }
+        }
+      }
+      if (!parentCommentExternalId) {
+        parentCommentExternalId = urlParentCommentExternalId;
       }
 
       const timestamp = timestampFromRoot(root, this.now);
@@ -1018,6 +1085,7 @@ export class FacebookDomAdapter {
         publishedAt: timestamp.publishedAt,
         collectedAt: this.now.toISOString(),
         timeParseStatus: timestamp.timeParseStatus,
+        observedOrder: rootIndex,
         author: authorFromRoot(root, true)
       });
       if (comments.length >= options.maxComments) break;

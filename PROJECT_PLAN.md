@@ -8,7 +8,7 @@
 
 ## 1. Tóm tắt dự án
 
-`listening_socialmediav2` là hệ thống social listening để thu thập những nội dung liên quan đến VinSmart Future/VinFuture trên:
+`listening_socialmediav2` là hệ thống Social Listening để thu thập những nội dung liên quan đến Vinsmart Future trên:
 
 - Facebook Group mà người dùng đã tham gia;
 - TikTok;
@@ -1241,7 +1241,7 @@ Những mục này không chặn việc dựng foundation; giá trị trong cộ
 
 | Quyết định | Mặc định đề xuất |
 |---|---|
-| Tên topic chuẩn | `VinSmart Future / VinFuture` |
+| Tên topic chuẩn | `Vinsmart Future` |
 | Số người dùng MVP | 1 admin |
 | Crawl thủ công hay lịch | Thủ công trong MVP |
 | Lưu tên tác giả | Có, chỉ display name; không profile link/ID/handle |

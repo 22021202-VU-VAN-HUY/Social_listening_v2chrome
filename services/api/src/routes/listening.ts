@@ -43,6 +43,7 @@ interface ContentRow {
     matchMode: "whole_word" | "contains_phrase";
   }>;
   parent_comment_id?: string | null;
+  observed_order?: number | null;
   canonical_url: string | null;
   body: string;
   published_at: Date | null;
@@ -390,6 +391,7 @@ export function registerListeningRoutes(
                  '[]'::jsonb
                ) AS matched_keywords,
                comment.parent_comment_id,
+               comment.observed_order,
                comment.canonical_url,
                comment.body,
                comment.published_at,
@@ -477,6 +479,7 @@ export function registerListeningRoutes(
             : null,
         },
         parentCommentId: row.parent_comment_id ?? null,
+        observedOrder: row.observed_order ?? null,
         sourceId: row.source_id,
         sourceName: row.source_name,
         url: row.canonical_url,

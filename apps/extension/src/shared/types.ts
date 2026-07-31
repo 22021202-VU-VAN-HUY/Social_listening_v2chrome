@@ -1,4 +1,4 @@
-export const EXTENSION_VERSION = "0.1.5";
+export const EXTENSION_VERSION = "0.1.6";
 
 export type ExtensionPresenceStatus =
   | "offline"
@@ -139,6 +139,7 @@ export interface SafeCommentDto {
   externalId: string;
   postExternalId: string;
   parentCommentExternalId: string | null;
+  observedOrder?: number;
   url: string | null;
   body: string;
   publishedAt: string | null;

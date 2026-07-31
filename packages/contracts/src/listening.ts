@@ -50,6 +50,7 @@ export const ingestCommentSchema = z
     ...contentBaseShape,
     postExternalId: z.string().trim().min(1).max(500),
     parentCommentExternalId: z.string().trim().min(1).max(500).nullable().optional(),
+    observedOrder: z.number().int().nonnegative().max(100_000).optional(),
     url: canonicalContentUrlSchema.nullable().optional(),
     author: authorSchema,
   })
@@ -135,6 +136,7 @@ export const commentViewSchema = z
     postExternalId: z.string(),
     post: commentPostContextSchema,
     parentCommentId: idSchema.nullable(),
+    observedOrder: z.number().int().nonnegative().nullable(),
     sourceId: idSchema,
     sourceName: z.string(),
     url: canonicalContentUrlSchema.nullable(),

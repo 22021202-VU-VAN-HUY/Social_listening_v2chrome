@@ -75,7 +75,7 @@ services:
       SENTIMENT_MODEL: ${SENTIMENT_MODEL:-gpt-5.6-terra}
       SENTIMENT_BASE_URL: ${SENTIMENT_BASE_URL:-https://api.openai.com/v1}
       SENTIMENT_API_KEY: ${SENTIMENT_API_KEY:-}
-      SENTIMENT_TOPIC: VinSmart Future / VinFuture
+      SENTIMENT_TOPIC: Vinsmart Future
       ALLOW_HEURISTIC_FALLBACK: ${ALLOW_HEURISTIC_FALLBACK:-false}
     depends_on:
       migrate:

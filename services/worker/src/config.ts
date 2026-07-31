@@ -15,7 +15,7 @@ const ConfigSchema = z.object({
   SENTIMENT_MODEL: z.string().min(1).default("sentiment-development"),
   SENTIMENT_API_KEY: z.string().optional(),
   SENTIMENT_BASE_URL: z.string().url().default("http://localhost:11434"),
-  SENTIMENT_TOPIC: z.string().min(1).default("VinSmart Future / VinFuture"),
+  SENTIMENT_TOPIC: z.string().min(1).default("Vinsmart Future"),
   SENTIMENT_CONFIDENCE_REVIEW_THRESHOLD: z.coerce
     .number()
     .min(0)
