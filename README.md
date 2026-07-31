@@ -57,12 +57,17 @@ hoặc:
 
 ```env
 SENTIMENT_PROVIDER=openai-compatible
-SENTIMENT_MODEL=<model-name>
-SENTIMENT_BASE_URL=https://<provider>/v1
-SENTIMENT_API_KEY=<set-locally>
+SENTIMENT_MODEL=gpt-5.6-terra
+SENTIMENT_BASE_URL=https://api.openai.com/v1
+SENTIMENT_API_KEY=<paste-your-openai-api-key>
+ALLOW_HEURISTIC_FALLBACK=false
 ```
 
 Không commit `.env` hoặc secret.
+
+Với Docker, nút **Phân tích tất cả** trên Listening feed sẽ đưa toàn bộ
+comment/reply vào hàng đợi. Worker chỉ gửi nội dung comment và ngữ cảnh bài
+cha sang OpenAI; API key không được gửi xuống trình duyệt.
 
 ## Chạy từng phần khi phát triển
 

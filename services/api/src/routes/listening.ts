@@ -110,6 +110,70 @@ export function registerListeningRoutes(
   app: FastifyInstance,
   context: AppContext,
 ): void {
+  app.post("/api/v1/sentiment/analyze-all", async (_request, reply) => {
+    const result = await context.database.query<{
+      total: string;
+      queued: string;
+    }>(
+      `
+        WITH source_comments AS (
+          SELECT comment.workspace_id,
+                 comment.id AS entity_id,
+                 comment.body AS text,
+                 left(post.body, 2000) AS post_context
+          FROM comments AS comment
+          JOIN posts AS post ON post.id = comment.post_id
+          WHERE comment.workspace_id = $1
+        ),
+        queued AS (
+          INSERT INTO sentiment_queue (
+            workspace_id,
+            entity_type,
+            entity_id,
+            text,
+            post_context,
+            status,
+            attempt_count,
+            available_at
+          )
+          SELECT workspace_id,
+                 'comment',
+                 entity_id,
+                 text,
+                 post_context,
+                 'queued',
+                 0,
+                 now()
+          FROM source_comments
+          ON CONFLICT (entity_type, entity_id)
+          DO UPDATE SET
+            workspace_id = EXCLUDED.workspace_id,
+            text = EXCLUDED.text,
+            post_context = EXCLUDED.post_context,
+            status = 'queued',
+            attempt_count = 0,
+            available_at = now(),
+            locked_at = NULL,
+            completed_at = NULL,
+            last_error = NULL,
+            updated_at = now()
+          WHERE sentiment_queue.status <> 'processing'
+          RETURNING entity_id
+        )
+        SELECT (SELECT count(*)::text FROM source_comments) AS total,
+               (SELECT count(*)::text FROM queued) AS queued
+      `,
+      [context.config.workspaceId],
+    );
+    const total = Number(result.rows[0]?.total ?? 0);
+    const queued = Number(result.rows[0]?.queued ?? 0);
+    return reply.code(202).send({
+      total,
+      queued,
+      skippedProcessing: total - queued,
+    });
+  });
+
   app.get("/api/v1/listening/posts", async (request) => {
     const query = parseWith(listeningFilterSchema, request.query);
     const filters = filterSql(query, "post");

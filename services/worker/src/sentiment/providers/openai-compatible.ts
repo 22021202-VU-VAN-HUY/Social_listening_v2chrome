@@ -12,6 +12,10 @@ interface ProviderOptions {
   model: string;
 }
 
+function isGpt56Model(model: string): boolean {
+  return /^gpt-5\.6(?:$|-)/u.test(model);
+}
+
 function stripCodeFence(value: string): string {
   return value
     .trim()
@@ -34,6 +38,19 @@ export class OpenAICompatibleSentimentProvider
   }
 
   async analyze(input: SentimentInput): Promise<SentimentResult> {
+    const requestBody = {
+      model: this.model,
+      ...(
+        isGpt56Model(this.model)
+          ? { reasoning_effort: "none" }
+          : { temperature: 0 }
+      ),
+      response_format: { type: "json_object" },
+      messages: [
+        { role: "system", content: buildSentimentSystemPrompt() },
+        { role: "user", content: buildSentimentUserPrompt(input) },
+      ],
+    };
     const response = await fetch(`${this.baseUrl}/chat/completions`, {
       method: "POST",
       headers: {
@@ -42,15 +59,7 @@ export class OpenAICompatibleSentimentProvider
           ? { authorization: `Bearer ${this.apiKey}` }
           : {}),
       },
-      body: JSON.stringify({
-        model: this.model,
-        temperature: 0,
-        response_format: { type: "json_object" },
-        messages: [
-          { role: "system", content: buildSentimentSystemPrompt() },
-          { role: "user", content: buildSentimentUserPrompt(input) },
-        ],
-      }),
+      body: JSON.stringify(requestBody),
       signal: AbortSignal.timeout(30_000),
     });
 

@@ -44,3 +44,6 @@ next-env.d.ts
 /.wrangler/
 /outputs/
 /work/
+
+# Local Facebook DOM snapshots may contain observed user content.
+example.html

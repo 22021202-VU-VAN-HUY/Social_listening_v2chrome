@@ -71,12 +71,12 @@ services:
     environment:
       NODE_ENV: production
       DATABASE_URL: postgres://listening:listening@postgres:5432/listening
-      SENTIMENT_PROVIDER: ${SENTIMENT_PROVIDER:-heuristic}
-      SENTIMENT_MODEL: ${SENTIMENT_MODEL:-vi-lexicon-v1}
-      SENTIMENT_BASE_URL: ${SENTIMENT_BASE_URL:-http://ollama:11434}
+      SENTIMENT_PROVIDER: ${SENTIMENT_PROVIDER:-openai-compatible}
+      SENTIMENT_MODEL: ${SENTIMENT_MODEL:-gpt-5.6-terra}
+      SENTIMENT_BASE_URL: ${SENTIMENT_BASE_URL:-https://api.openai.com/v1}
       SENTIMENT_API_KEY: ${SENTIMENT_API_KEY:-}
       SENTIMENT_TOPIC: VinSmart Future / VinFuture
-      ALLOW_HEURISTIC_FALLBACK: ${ALLOW_HEURISTIC_FALLBACK:-true}
+      ALLOW_HEURISTIC_FALLBACK: ${ALLOW_HEURISTIC_FALLBACK:-false}
     depends_on:
       migrate:
         condition: service_completed_successfully

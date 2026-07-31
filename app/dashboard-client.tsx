@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  AuthorBadge,
   DataNotice,
   EmptyState,
   ProgressBar,
@@ -84,6 +83,79 @@ type ActiveJob = {
 };
 
 type DataMode = "live" | "offline" | "degraded";
+
+type GroupedPost = {
+  key: string;
+  post: CommentItem;
+  keywords: string[];
+  comments: Array<{ item: CommentItem; depth: number }>;
+};
+
+function authorLabel(name: string | null, anonymous: boolean): string {
+  if (anonymous) return "Người tham gia ẩn danh";
+  return name?.trim() || "Không xác định";
+}
+
+function authorInitial(name: string | null, anonymous: boolean): string {
+  if (anonymous) return "A";
+  return name?.trim().charAt(0).toLocaleUpperCase("vi-VN") || "?";
+}
+
+function orderCommentThread(
+  comments: CommentItem[],
+): Array<{ item: CommentItem; depth: number }> {
+  const ids = new Set(comments.map((comment) => comment.id));
+  const children = new Map<string, CommentItem[]>();
+  const roots: CommentItem[] = [];
+
+  for (const comment of comments) {
+    if (!comment.parentCommentId || !ids.has(comment.parentCommentId)) {
+      roots.push(comment);
+      continue;
+    }
+    const siblings = children.get(comment.parentCommentId) ?? [];
+    siblings.push(comment);
+    children.set(comment.parentCommentId, siblings);
+  }
+
+  const ordered: Array<{ item: CommentItem; depth: number }> = [];
+  const visited = new Set<string>();
+  const append = (comment: CommentItem, depth: number) => {
+    if (visited.has(comment.id)) return;
+    visited.add(comment.id);
+    ordered.push({ item: comment, depth: Math.min(depth, 2) });
+    for (const child of children.get(comment.id) ?? []) {
+      append(child, depth + 1);
+    }
+  };
+
+  for (const root of roots) append(root, 0);
+  for (const comment of comments) append(comment, 0);
+  return ordered;
+}
+
+function groupByPost(items: CommentItem[]): GroupedPost[] {
+  const groups = new Map<string, CommentItem[]>();
+  for (const item of items) {
+    const key = item.postId || `unknown-post-${item.id}`;
+    const comments = groups.get(key) ?? [];
+    comments.push(item);
+    groups.set(key, comments);
+  }
+
+  return [...groups.entries()].map(([key, comments]) => ({
+    key,
+    post: comments[0]!,
+    keywords: [
+      ...new Set(
+        comments
+          .flatMap((comment) => comment.keywords)
+          .filter((keyword) => keyword !== "Chưa xác định"),
+      ),
+    ],
+    comments: orderCommentThread(comments),
+  }));
+}
 
 function sentimentOf(value: unknown): Sentiment | null {
   if (value === null || value === undefined || value === "") return null;
@@ -567,6 +639,11 @@ export function DashboardClient() {
   const [platform, setPlatform] = useState("all");
   const [sentiment, setSentiment] = useState("all");
   const [query, setQuery] = useState("");
+  const [analyzingAll, setAnalyzingAll] = useState(false);
+  const [analysisNotice, setAnalysisNotice] = useState<{
+    kind: "success" | "error";
+    message: string;
+  } | null>(null);
   const refreshing = useRef(false);
 
   const refresh = useCallback(async () => {
@@ -695,6 +772,51 @@ export function DashboardClient() {
       return true;
     });
   }, [platform, query, sentiment, snapshot?.items]);
+
+  const groupedPosts = useMemo(
+    () => groupByPost(filteredItems),
+    [filteredItems],
+  );
+
+  const analyzeAll = useCallback(async () => {
+    if (analyzingAll) return;
+    setAnalyzingAll(true);
+    setAnalysisNotice(null);
+    try {
+      const result = asRecord(
+        await apiRequest<unknown>("/sentiment/analyze-all", {
+          method: "POST",
+        }),
+      );
+      const queued = asNumber(
+        result.queued ??
+          result.enqueued ??
+          result.pending ??
+          result.count ??
+          result.total,
+        -1,
+      );
+      setAnalysisNotice({
+        kind: "success",
+        message:
+          queued >= 0
+            ? `Đã gửi ${queued.toLocaleString("vi-VN")} bình luận sang AI. Kết quả sẽ tự cập nhật.`
+            : asString(result.message) ||
+              "Đã gửi toàn bộ bình luận sang AI. Kết quả sẽ tự cập nhật.",
+      });
+      await refresh();
+    } catch (error) {
+      setAnalysisNotice({
+        kind: "error",
+        message:
+          error instanceof Error
+            ? error.message
+            : "Không thể bắt đầu phân tích lúc này.",
+      });
+    } finally {
+      setAnalyzingAll(false);
+    }
+  }, [analyzingAll, refresh]);
 
   if (!snapshot) {
     return (
@@ -958,8 +1080,33 @@ export function DashboardClient() {
             <span className="section-kicker">Listening feed</span>
             <h3>Bình luận & phản hồi</h3>
           </div>
-          <span className="quiet-badge">{filteredItems.length} kết quả</span>
+          <div className="content-heading-actions">
+            <span className="quiet-badge">
+              {groupedPosts.length} bài · {filteredItems.length} bình luận
+            </span>
+            <button
+              className="button button-primary analyze-all-button"
+              type="button"
+              onClick={() => void analyzeAll()}
+              disabled={analyzingAll || snapshot.total === 0}
+            >
+              <span aria-hidden="true">{analyzingAll ? "◌" : "✦"}</span>
+              {analyzingAll ? "Đang gửi phân tích…" : "Phân tích tất cả"}
+            </button>
+          </div>
         </div>
+
+        {analysisNotice && (
+          <div
+            className={`analysis-notice analysis-${analysisNotice.kind}`}
+            role={analysisNotice.kind === "error" ? "alert" : "status"}
+          >
+            <span aria-hidden="true">
+              {analysisNotice.kind === "success" ? "✓" : "!"}
+            </span>
+            {analysisNotice.message}
+          </div>
+        )}
 
         <div
           className="filter-bar comment-filter-bar"
@@ -1003,120 +1150,151 @@ export function DashboardClient() {
         </div>
 
         {filteredItems.length ? (
-          <div className="content-list">
-            {filteredItems.map((item) => (
-              <article className="content-item" key={item.id}>
-                <div className="content-meta">
-                  <span className={`platform-pill platform-${item.platform}`}>
-                    {item.platform === "facebook"
+          <div className="facebook-feed">
+            {groupedPosts.map(({ key, post, keywords, comments }) => (
+              <article className="facebook-post-card" key={key}>
+                <header className="facebook-post-header">
+                  <span
+                    className={`facebook-avatar${post.postAnonymous ? " is-anonymous" : ""}`}
+                    aria-hidden="true"
+                  >
+                    {authorInitial(post.postAuthorName, post.postAnonymous)}
+                  </span>
+                  <div className="facebook-post-identity">
+                    <strong>
+                      {authorLabel(post.postAuthorName, post.postAnonymous)}
+                    </strong>
+                    <span>
+                      {post.source} ·{" "}
+                      {post.postPublishedAt
+                        ? formatDateTime(post.postPublishedAt)
+                        : "Không xác định thời gian"}{" "}
+                      · <span aria-label="Công khai">●</span>
+                    </span>
+                  </div>
+                  <span
+                    className={`platform-pill platform-${post.platform}`}
+                  >
+                    {post.platform === "facebook"
                       ? "Facebook"
-                      : item.platform === "tiktok"
+                      : post.platform === "tiktok"
                         ? "TikTok"
                         : "Threads"}
                   </span>
-                  <span className="content-kind">
-                    {item.parentCommentId ? "Phản hồi" : "Bình luận"}
+                  <span className="facebook-more" aria-hidden="true">
+                    •••
                   </span>
-                  <span className="comment-time-label">Đăng comment</span>
-                  {item.commentPublishedAt ? (
-                    <time>{formatDateTime(item.commentPublishedAt)}</time>
-                  ) : (
-                    <span className="time-unknown">Không xác định</span>
-                  )}
-                  <span
-                    className="collected-time"
-                    title={`Comment được thu thập lúc ${formatDateTime(item.commentCollectedAt)}`}
-                  >
-                    Thu thập {formatDateTime(item.commentCollectedAt)}
-                  </span>
-                  {item.commentTimeParseStatus === "unknown" && (
-                    <span className="time-unknown">Timestamp chưa parse</span>
-                  )}
-                </div>
+                </header>
 
-                <p className="content-copy">{item.content}</p>
+                <p className="facebook-post-copy">{post.postContext}</p>
 
-                <div className="post-context">
-                  <div>
-                    <span>Bài cha · {item.source}</span>
-                    <strong>{item.postContext}</strong>
-                  </div>
-                  <div className="post-context-meta">
-                    <div className="post-author">
-                      <span>Tác giả bài</span>
-                      <AuthorBadge
-                        name={item.postAuthorName}
-                        anonymous={item.postAnonymous}
-                      />
-                    </div>
-                    <span>
-                      Đăng bài:{" "}
-                      {item.postPublishedAt
-                        ? formatDateTime(item.postPublishedAt)
-                        : "Không xác định"}
-                    </span>
-                    <span
-                      title={`Bài cha được thu thập lúc ${formatDateTime(item.postCollectedAt)}`}
-                    >
-                      Thu thập: {formatDateTime(item.postCollectedAt)}
-                    </span>
-                    {item.postTimeParseStatus === "unknown" && (
-                      <span className="time-unknown">Thời gian bài chưa parse</span>
-                    )}
-                    {item.postUrl && (
-                      <a
-                        href={item.postUrl}
-                        target="_blank"
-                        rel="noreferrer"
-                        aria-label="Mở bài viết cha trong tab mới"
-                      >
-                        Mở bài cha ↗
-                      </a>
-                    )}
-                  </div>
-                </div>
-
-                <div className="content-footer">
-                  <div className="content-identity">
-                    <AuthorBadge
-                      name={item.authorName}
-                      anonymous={item.anonymous}
-                    />
-                    <span className="source-name">
-                      {item.parentCommentId
-                        ? `Reply · ${item.source}`
-                        : item.source}
-                    </span>
-                  </div>
-                  <div className="content-signals">
-                    {item.keywords.map((keyword) => (
-                      <span className="keyword-chip" key={keyword}>
-                        {keyword}
-                      </span>
-                    ))}
-                    {item.sentiment ? (
-                      <SentimentBadge
-                        sentiment={item.sentiment}
-                        confidence={item.confidence}
-                      />
+                <div className="facebook-post-meta">
+                  <div className="facebook-keywords">
+                    <span>Bắt được keyword</span>
+                    {keywords.length ? (
+                      keywords.map((keyword) => (
+                        <span className="keyword-chip" key={keyword}>
+                          {keyword}
+                        </span>
+                      ))
                     ) : (
-                      <span className="pending-badge">Chờ AI</span>
+                      <span className="keyword-chip keyword-unknown">
+                        Chưa xác định
+                      </span>
                     )}
-                    {item.sentiment && item.confidence < 0.65 && (
-                      <span className="review-badge">Cần xem lại</span>
+                  </div>
+                  <div className="facebook-post-links">
+                    <span
+                      title={`Bài được thu thập lúc ${formatDateTime(post.postCollectedAt)}`}
+                    >
+                      Thu thập {formatDateTime(post.postCollectedAt)}
+                    </span>
+                    {post.postTimeParseStatus === "unknown" && (
+                      <span className="time-unknown">Thời gian chưa parse</span>
                     )}
-                    {item.originalUrl && (
+                    {post.postUrl && (
                       <a
-                        className="original-link"
-                        href={item.originalUrl}
+                        href={post.postUrl}
                         target="_blank"
                         rel="noreferrer"
-                        aria-label="Mở bình luận gốc trong tab mới"
                       >
-                        Bình luận gốc ↗
+                        Mở bài viết ↗
                       </a>
                     )}
                   </div>
+                </div>
+
+                <div className="facebook-comment-summary">
+                  <span>{comments.length} bình luận và phản hồi</span>
+                  <span>Chỉ đọc · Không tương tác</span>
+                </div>
+
+                <div className="facebook-comments">
+                  {comments.map(({ item, depth }) => (
+                    <div
+                      className={`facebook-comment${depth ? " is-reply" : ""}`}
+                      style={
+                        depth
+                          ? { marginLeft: `${Math.min(depth, 2) * 34}px` }
+                          : undefined
+                      }
+                      key={item.id}
+                    >
+                      <span
+                        className={`facebook-avatar facebook-comment-avatar${item.anonymous ? " is-anonymous" : ""}`}
+                        aria-hidden="true"
+                      >
+                        {authorInitial(item.authorName, item.anonymous)}
+                      </span>
+                      <div className="facebook-comment-body">
+                        <div className="facebook-comment-line">
+                          <div className="facebook-comment-bubble">
+                            <strong>
+                              {authorLabel(item.authorName, item.anonymous)}
+                            </strong>
+                            <p>{item.content}</p>
+                          </div>
+                          <div className="facebook-comment-sentiment">
+                            {item.sentiment ? (
+                              <SentimentBadge
+                                sentiment={item.sentiment}
+                                confidence={item.confidence}
+                              />
+                            ) : (
+                              <span className="pending-badge">Chờ AI</span>
+                            )}
+                          </div>
+                        </div>
+                        <div className="facebook-comment-actions">
+                          <span>{depth ? "Phản hồi" : "Bình luận"}</span>
+                          <time>
+                            {item.commentPublishedAt
+                              ? formatDateTime(item.commentPublishedAt)
+                              : "Không xác định thời gian"}
+                          </time>
+                          {item.commentTimeParseStatus === "unknown" && (
+                            <span className="time-warning">
+                              Timestamp chưa parse
+                            </span>
+                          )}
+                          <span
+                            title={`Thu thập lúc ${formatDateTime(item.commentCollectedAt)}`}
+                          >
+                            Thu thập {formatDateTime(item.commentCollectedAt)}
+                          </span>
+                          {item.originalUrl && (
+                            <a
+                              href={item.originalUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                            >
+                              Mở bình luận ↗
+                            </a>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
                 </div>
               </article>
             ))}

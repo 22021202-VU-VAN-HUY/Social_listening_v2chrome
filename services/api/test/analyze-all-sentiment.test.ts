@@ -1,0 +1,46 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import Fastify from "fastify";
+import type { Database } from "../src/db.js";
+import { loadConfig } from "../src/config.js";
+import { registerListeningRoutes } from "../src/routes/listening.js";
+
+test("analyze-all requeues every workspace comment except in-flight work", async () => {
+  let querySql = "";
+  let queryParameters: unknown[] = [];
+  const database = {
+    async query(sql: string, parameters: unknown[] = []) {
+      querySql = sql;
+      queryParameters = parameters;
+      return {
+        rows: [{ total: "12", queued: "10" }],
+        rowCount: 1,
+      };
+    },
+  } as unknown as Database;
+  const config = loadConfig({ NODE_ENV: "test" } as NodeJS.ProcessEnv);
+  const app = Fastify({ logger: false });
+  registerListeningRoutes(app, { config, database });
+
+  const response = await app.inject({
+    method: "POST",
+    url: "/api/v1/sentiment/analyze-all",
+  });
+  await app.close();
+
+  assert.equal(response.statusCode, 202);
+  assert.deepEqual(response.json(), {
+    total: 12,
+    queued: 10,
+    skippedProcessing: 2,
+  });
+  assert.deepEqual(queryParameters, [config.workspaceId]);
+  assert.match(querySql, /FROM comments AS comment/u);
+  assert.match(querySql, /JOIN posts AS post/u);
+  assert.match(querySql, /comment\.workspace_id = \$1/u);
+  assert.match(querySql, /left\(post\.body, 2000\) AS post_context/u);
+  assert.match(
+    querySql,
+    /WHERE sentiment_queue\.status <> 'processing'/u,
+  );
+});
