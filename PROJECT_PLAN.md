@@ -1,20 +1,73 @@
-# Kế hoạch dự án `listening_socialmediav2`
+# Kế hoạch và trạng thái dự án `Social Listening`
 
-> Phiên bản tài liệu: 1.1  
-> Ngày lập: 2026-07-30  
-> Trạng thái: Đang triển khai — cập nhật phạm vi comment-only  
-> Phạm vi ưu tiên: Facebook end-to-end; TikTok và Threads chuẩn bị sẵn kiến trúc connector  
+> Phiên bản tài liệu: 2.0 — as-built
+>
+> Ngày lập: 2026-07-30
+>
+> Cập nhật gần nhất: 2026-07-31
+>
+> Trạng thái: Facebook MVP đã triển khai; đang UAT và tiếp tục làm cứng Facebook DOM adapter
+>
+> Tên ứng dụng: **Social Listening**
+>
+> Chủ đề chuẩn: **Vinsmart Future**
+>
+> Extension: `0.1.6`
+>
+> Phạm vi ưu tiên: Facebook end-to-end; TikTok và Threads chuẩn bị sẵn kiến trúc connector
+>
 > Múi giờ nghiệp vụ: `Asia/Ho_Chi_Minh`
+
+![Công nghệ sử dụng trong Social Listening](docs/images/social-listening-technology-stack.png)
+
+## Trạng thái triển khai hiện tại
+
+Đây là phần đối chiếu kế hoạch với mã nguồn đã triển khai. Các mục phía dưới tiếp tục giữ vai trò đặc tả kiến trúc và tiêu chí nghiệm thu.
+
+| Hạng mục | Công nghệ / cách triển khai hiện tại | Trạng thái |
+|---|---|---|
+| Web | Next App Router/Vinext, React 19, TypeScript, Tailwind CSS 4 | Đã triển khai |
+| Giao diện | Dashboard đỏ sáng `#E2232A` và trắng theo nhận diện Vinsmart Future; logo, favicon, feed kiểu Facebook | Đã triển khai |
+| Extension | Chrome Manifest V3, TypeScript, một tab Facebook nền, chỉ đọc | Đã triển khai `0.1.6` |
+| Group discovery | Đọc danh sách group đã tham gia, tổng kỳ vọng từ tiêu đề `(N)`, nested scroller, không giới hạn 10 group | Đã triển khai |
+| Crawl Facebook | Lọc post theo keyword/lookback; lấy post, comment, reply và metadata thời gian/keyword | Đã triển khai, tiếp tục UAT với DOM thật |
+| Reply hierarchy | Lưu `parent_comment_id`, reply nhiều bậc và `observed_order` theo thứ tự Facebook quan sát được | Đã triển khai qua migration `009_preserve_comment_order.sql` |
+| Danh tính tối thiểu | Chỉ lưu display name và `real|anonymous|unknown`; không lưu link/ID/handle/avatar người dùng | Đã triển khai |
+| API | Fastify + TypeScript, ingest idempotent, job/lease, listening feed và sentiment endpoint | Đã triển khai |
+| Database | PostgreSQL 16, migrations `001`–`009` | Đã triển khai |
+| AI sentiment | Worker Node.js; phân tích thủ công post và comment; `positive|negative|neutral`; chống gửi lại nội dung đã phân tích | Đã triển khai |
+| Hạ tầng | Docker Compose: PostgreSQL, migrate, API, worker, web; Ollama là profile tùy chọn | Đã triển khai local |
+| Realtime | Web poll API mỗi 5 giây và fetch ngay khi tab được focus lại | Đã triển khai |
+| Kiểm thử | Web 3, Extension 62, API 33, Worker 7 — tổng 105 test đã pass ở lần kiểm tra đầy đủ gần nhất | Đã kiểm tra |
+| TikTok / Threads | Settings và connector boundary | Phase 2, chưa có connector |
+
+### Luồng đang vận hành
+
+1. Người dùng mở web tại `http://localhost:3001`, cấu hình keyword, lookback và chọn Facebook Group.
+2. Web tạo job; extension đã ghép nhận job và chỉ mở tối đa một tab Facebook nền.
+3. Extension đọc group/post/comment/reply, chỉ click các nút xem hoặc tải thêm nội dung, rồi gửi batch về API tại `http://localhost:4000`.
+4. API upsert dữ liệu vào PostgreSQL, giữ đúng post cha, cây reply, thứ tự quan sát, timestamp và keyword đã bắt.
+5. Dữ liệu mới xuất hiện với trạng thái `Chờ AI`; crawl không tự gọi AI.
+6. Khi người dùng bấm `Phân tích tất cả`, API chỉ queue post/comment chưa có kết quả. Nội dung đã phân tích hoặc đang queue/processing không bị gửi lại.
+7. Worker phân tích đánh giá đẹp/xấu/trung tính về Vinsmart Future; dashboard cập nhật kết quả sau mỗi chu kỳ tối đa 5 giây.
+8. Extension đóng tab do nó sở hữu khi job thành công, một phần, lỗi, bị hủy hoặc cần đăng nhập lại.
+
+### Phần còn lại
+
+- UAT thêm với Facebook DOM thực tế, đặc biệt các biến thể reply bị Facebook render phẳng và bài/comment lazy-load.
+- Hoàn thiện hardening, runbook backup/restore và bộ đánh giá AI tiếng Việt.
+- TikTok và Threads chỉ triển khai khi có API/quyền truy cập hợp lệ.
+- Production hosting chưa chốt; Docker local và GitHub hiện là nguồn mã chuẩn.
 
 ## 1. Tóm tắt dự án
 
-`listening_socialmediav2` là hệ thống Social Listening để thu thập những nội dung liên quan đến Vinsmart Future trên:
+`Social Listening` là hệ thống thu thập và phân tích những nội dung liên quan đến Vinsmart Future trên:
 
 - Facebook Group mà người dùng đã tham gia;
 - TikTok;
 - Threads.
 
-Hệ thống lọc bài viết theo keyword, lưu metadata bài cha, lấy comment/reply liên quan, sau đó chỉ dùng AI để phân loại cảm xúc của comment/reply thành đúng ba nhãn:
+Hệ thống lọc bài viết theo keyword, lưu đầy đủ metadata bài cha, lấy comment/reply liên quan và cho phép người dùng chủ động gọi AI để phân loại cảm xúc của cả post lẫn comment/reply thành đúng ba nhãn:
 
 - `positive`;
 - `negative`;
@@ -31,7 +84,7 @@ Extension không chứa dashboard, không lưu dữ liệu nghiệp vụ dài h�
 
 > **Làm rõ ranh giới extension:** với group đã join/private, backend không có phiên Facebook để tự lấy comment. Vì vậy, nếu “extension chỉ lấy group + bài viết” được hiểu là không được đọc comment, chức năng crawl comment phải bỏ khỏi MVP hoặc thay bằng một API được cấp quyền. Kế hoạch này hiểu đúng vai trò mong muốn là extension chỉ làm **data collection agent** cho group, post và comment; toàn bộ cấu hình, business logic, AI, lưu trữ và dashboard vẫn nằm ở web/backend.
 
-> **Quyết định phạm vi 1.1:** comment/reply là dữ liệu listening duy nhất. Post vẫn được đọc và lưu đủ source, URL, body, tác giả dạng name-only, thời gian đăng/thu thập, trạng thái parse thời gian và toàn bộ keyword khớp để làm metadata/ngữ cảnh cha. Extension hoàn toàn read-only: không nhập text, Like, Share, đăng bài hoặc gửi comment.
+> **Quyết định phạm vi 2.0:** feed lấy comment/reply làm trọng tâm nhưng post cha cũng là một entity có thể phân tích AI. Post được lưu đủ source, URL, body, tác giả dạng name-only, thời gian đăng/thu thập, trạng thái parse thời gian và toàn bộ keyword khớp. Extension hoàn toàn read-only: không nhập text, Like, Share, đăng bài hoặc gửi comment.
 
 ## 2. Các quyết định nền tảng
 
@@ -64,7 +117,7 @@ Không thêm Redis trong MVP. `pg-boss` chỉ dùng cho worker job như sentimen
 5. Hệ thống chỉ xử lý những group đã chọn và ưu tiên những bài có keyword.
 6. Tại mọi thời điểm, extension chỉ sở hữu tối đa một tab Facebook automation cho mỗi thiết bị/job và luôn đóng tab đang sở hữu khi kết thúc.
 7. Dashboard thấy tiến độ mới chậm nhất 5 giây sau khi backend nhận cập nhật.
-8. Comment/reply được AI gán sentiment, có confidence và thông tin model/prompt để truy vết; post chỉ là metadata/ngữ cảnh.
+8. Post và comment/reply có thể được AI gán sentiment, có confidence và thông tin model/prompt để truy vết; chỉ phân tích khi người dùng bấm nút thủ công.
 
 ### 3.2. Chỉ số vận hành ban đầu
 
@@ -101,7 +154,7 @@ Không thêm Redis trong MVP. `pg-boss` chỉ dùng cho worker job như sentimen
 - Lấy post khớp keyword trong group đã chọn.
 - Chỉ lấy comment của post đã khớp keyword.
 - Upsert dữ liệu, chống trùng và hỗ trợ chạy lại.
-- AI sentiment chỉ cho comment/reply.
+- AI sentiment thủ công cho post và comment/reply; nội dung đã có kết quả không bị gửi lại.
 - Dashboard tiến độ và kết quả.
 - Hủy job từ web.
 - Docker Compose cho web, API, worker và PostgreSQL.
@@ -280,18 +333,19 @@ Settings
 
 ### 7.5. Dashboard
 
+- Tên sản phẩm `Social Listening`, chủ đề `Vinsmart Future`, logo thống nhất với extension.
+- Màu đỏ sáng `#E2232A`, nền trắng/xám rất nhạt, tránh đỏ burgundy quá đậm.
 - Tổng nội dung theo sentiment.
 - Tỷ lệ positive/negative/neutral.
 - Biểu đồ theo ngày.
 - Breakdown theo platform, group/source và keyword.
-- Bảng post/comment mới nhất:
-  - platform;
-  - source;
-  - đoạn nội dung;
-  - sentiment;
-  - confidence;
-  - ngày đăng;
-  - link gốc.
+- `Listening feed` và `Bình luận & phản hồi` hiển thị dạng card giống luồng bài viết Facebook:
+  - post cha với tên group/tác giả, nội dung, thời gian đăng và keyword đã bắt;
+  - comment đúng post cha, có tên hiển thị hoặc nhãn người tham gia ẩn danh;
+  - reply nhiều bậc được thụt theo `parent_comment_id`, không ép phẳng ở bậc 2;
+  - root comment và từng nhóm reply sắp theo `observed_order` đã quan sát trên Facebook;
+  - badge `Chờ AI`, `Positive`, `Negative` hoặc `Neutral`.
+- Nút thủ công `Phân tích tất cả` để phân tích một lần toàn bộ post/comment chưa có kết quả.
 - Bộ lọc ngày/platform/source/keyword/sentiment.
 - Badge `Cần xem lại` cho confidence thấp.
 - Widget job đang chạy:
@@ -386,10 +440,10 @@ Backend upsert group theo external ID; nếu không lấy được ID ổn đị
    - upload comment theo batch.
 10. Extension checkpoint sau mỗi task và gửi heartbeat định kỳ.
     - Checkpoint chỉ được tăng sau khi backend ACK batch tương ứng.
-11. Backend upsert post context + comment, nhưng chỉ đưa comment/reply mới hoặc thay đổi vào queue sentiment.
+11. Backend upsert post context + comment; dữ liệu mới có trạng thái `Chờ AI`, chưa gọi AI.
 12. Khi tất cả task kết thúc, extension báo complete/partial và đóng tab trong `finally`.
-13. Worker tiếp tục sentiment; job chuyển `processing_ai`.
-14. Khi queue sentiment của job kết thúc, job chuyển `completed` hoặc `partial`.
+13. Job crawl kết thúc độc lập với AI sentiment.
+14. Khi người dùng bấm `Phân tích tất cả`, API mới queue các entity chưa có kết quả để worker xử lý.
 
 Một group lỗi không làm mất dữ liệu của group khác. Job có thể hoàn thành `partial` cùng danh sách task lỗi.
 
@@ -397,13 +451,13 @@ Nếu không parse chắc chắn timestamp, entity được lưu với `publishe
 
 ### 8.4. AI sentiment
 
-1. Worker chỉ lấy comment/reply chưa phân tích; không claim post.
-2. Tạo `analysis_input_hash` từ toàn bộ input thực tế: text, context post cha, topic/target, normalization version và analysis schema version.
-3. Kiểm tra cache theo analysis input hash + provider + model + prompt version.
-4. Loại bỏ author identifier trước khi gửi AI.
-5. Với comment, gửi thêm ngữ cảnh ngắn của post cha.
-6. Provider trả structured JSON.
-7. Validate schema; retry có giới hạn nếu output sai hoặc lỗi tạm thời.
+1. Người dùng bấm `Phân tích tất cả` trên dashboard.
+2. API chọn cả `post` và `comment` chưa có kết quả sentiment.
+3. Entity đã phân tích, đã queue hoặc đang processing bị bỏ qua; entity lỗi có thể retry có kiểm soát.
+4. Worker tạo `analysis_input_hash` từ toàn bộ input thực tế: text, context post cha, topic/target, normalization version và analysis schema version.
+5. Kiểm tra cache theo analysis input hash + provider + model + prompt version để không gọi lại AI khi input không đổi.
+6. Loại bỏ author identifier trước khi gửi AI; comment được gửi kèm ngữ cảnh ngắn của post cha.
+7. Provider trả structured JSON; worker validate schema và retry có giới hạn với lỗi tạm thời.
 8. Lưu sentiment và cập nhật aggregate.
 9. Confidence thấp vẫn giữ một trong ba nhãn nhưng gắn `needs_review = true`.
 10. AI lỗi sau retry chuyển `analysis_failed`; raw content vẫn được giữ.
@@ -639,8 +693,9 @@ Các counter chỉ tăng theo transaction hoặc được tính lại idempotent
 | `crawler_slots` | device, platform, job, lease token hash, fencing token, lease expiry |
 | `ingest_batches` | idempotency key, job, checksum, received count |
 | `posts` | platform, external ID, source, URL, body, published/collected time, author name, anonymous flag/kind |
-| `comments` | platform, external ID, post, parent comment, body, published/collected time, author name, anonymous flag/kind |
+| `comments` | platform, external ID, post, parent comment, `observed_order`, body, published/collected time, author name, anonymous flag/kind |
 | `keyword_hits` | keyword + entity reference + match excerpt |
+| `sentiment_queue` | post/comment cần phân tích, trạng thái queued/processing/completed/failed, attempt và lease |
 | `sentiment_analyses` | entity, analysis input hash, relevance, label, confidence, provider/model/prompt/schema version |
 | `sentiment_overrides` | human label, reason, actor, timestamp |
 | `audit_logs` | security/settings/admin actions |
@@ -660,7 +715,7 @@ Các counter chỉ tăng theo transaction hoặc được tính lại idempotent
 ### 12.3. Index cần có
 
 - `posts(platform, published_at DESC)`.
-- `comments(post_id, published_at)`.
+- `comments(post_id, observed_order, published_at)`.
 - `crawl_jobs(workspace_id, status, created_at DESC)`.
 - `crawl_events(job_id, sequence)`.
 - `sentiment_analyses(label, analyzed_at DESC)`.
@@ -722,11 +777,12 @@ Các counter chỉ tăng theo transaction hoặc được tính lại idempotent
 
 | Method | Endpoint | Mục đích |
 |---|---|---|
-| `GET` | `/api/v1/listening/posts` | Metadata post cha; sentiment luôn `null` |
+| `GET` | `/api/v1/listening/posts` | Post cha kèm metadata, keyword và trạng thái/kết quả sentiment |
 | `GET` | `/api/v1/listening/comments` | Comment/reply kèm toàn bộ context post và keyword |
-| `GET` | `/api/v1/dashboard/summary` | KPI sentiment comment/reply |
-| `GET` | `/api/v1/dashboard/timeline` | Chuỗi thời gian comment/reply đã parse |
-| `POST` | `/api/v1/sentiment/comment/{entityId}/override` | Human override cho comment/reply |
+| `GET` | `/api/v1/dashboard/summary` | KPI sentiment post/comment |
+| `GET` | `/api/v1/dashboard/timeline` | Chuỗi thời gian nội dung đã parse |
+| `POST` | `/api/v1/sentiment/analyze-all` | Queue thủ công toàn bộ post/comment chưa có kết quả |
+| `POST` | `/api/v1/sentiment/{entityType}/{entityId}/override` | Human override cho post/comment |
 
 Mọi endpoint ghi dùng request ID; ingest batch bắt buộc có `Idempotency-Key`. Extension token chỉ có quyền extension endpoints, không có quyền admin Settings.
 
@@ -778,8 +834,8 @@ Nội dung có `isRelevant = false` vẫn giữ tri-state label để đúng con
 
 ### 15.2. Input
 
+- Post: post text và topic/target `Vinsmart Future`.
 - Comment/reply: comment text + đoạn ngữ cảnh ngắn từ post cha.
-- Post không được phân tích sentiment; chỉ dùng làm metadata/ngữ cảnh.
 - Không gửi group member ID, author ID hoặc dữ liệu ghép extension.
 - Giới hạn độ dài và cắt theo chiến lược ổn định.
 
@@ -801,7 +857,8 @@ Nội dung có `isRelevant = false` vẫn giữ tri-state label để đúng con
 ### 15.4. Kiểm soát chi phí
 
 - Cache theo toàn bộ analysis input hash + provider + model + prompt/schema version; comment giống chữ nhưng khác post cha không được dùng chung cache.
-- Chỉ phân tích comment/reply của post đã match; không phân tích post.
+- Chỉ queue khi người dùng bấm `Phân tích tất cả`; crawl không tự gọi AI.
+- Phân tích post đã match và comment/reply của post đó; entity đã có kết quả hoặc đang queue/processing không bị gửi lại.
 - Batch nếu provider hỗ trợ.
 - Theo dõi token/request/cost theo job.
 - Budget guard theo ngày và theo job.
@@ -837,36 +894,24 @@ Nếu không có cơ sở cho automation, thay Facebook connector bằng phươn
 - Audit thay đổi Settings, device, job và human override.
 - Backup PostgreSQL mã hóa và kiểm tra restore định kỳ.
 
-## 17. Cấu trúc monorepo dự kiến
+## 17. Cấu trúc mã nguồn hiện tại
 
 ```text
-listening_socialmediav2/
+Social_listeningv2/
+├─ app/                       # Next App Router/Vinext web
 ├─ apps/
-│  ├─ web/
-│  ├─ api/
-│  ├─ worker/
-│  └─ extension/
+│  └─ extension/             # Chrome MV3 extension
 ├─ packages/
-│  ├─ contracts/
-│  ├─ database/
-│  ├─ domain/
-│  ├─ sentiment/
-│  ├─ platform-core/
-│  ├─ ui/
-│  ├─ config/
-│  └─ test-fixtures/
-├─ infra/
-│  ├─ docker/
-│  └─ scripts/
+│  └─ contracts/             # Zod schema và shared types
+├─ services/
+│  ├─ api/                   # Fastify API và migrations 001–009
+│  └─ worker/                # Sentiment worker
 ├─ docs/
-│  ├─ architecture/
-│  ├─ api/
-│  ├─ operations/
-│  └─ compliance/
+│  └─ images/                # Ảnh kiến trúc/công nghệ
 ├─ .env.example
 ├─ compose.yaml
+├─ Dockerfile
 ├─ package.json
-├─ pnpm-workspace.yaml
 └─ PROJECT_PLAN.md
 ```
 
@@ -883,6 +928,7 @@ Extension build ra artifact riêng; extension không chạy trong Docker.
 | `worker` | Sentiment, aggregate, cleanup |
 | `web` | Next.js web |
 | `migrate` | One-shot migration trước khi API nhận traffic |
+| `ollama` | Provider local tùy chọn, chỉ bật bằng Compose profile |
 
 ### 18.2. Yêu cầu
 
@@ -900,28 +946,27 @@ docker compose up --build
 - Extension dùng API localhost qua dev manifest.
 - Production đặt reverse proxy/TLS bên ngoài hoặc thêm service proxy có cấu hình rõ ràng.
 
-## 19. Biến môi trường dự kiến
+## 19. Biến môi trường đang dùng
 
 ```text
 NODE_ENV=
-APP_BASE_URL=
-API_BASE_URL=
+NEXT_PUBLIC_API_BASE_URL=
+WEB_PORT=
 DATABASE_URL=
-SESSION_SECRET=
-EXTENSION_ALLOWED_ORIGINS=
-EXTENSION_TOKEN_PEPPER=
-DATA_HASH_SALT=
-ENCRYPTION_KEY=
+WORKSPACE_ID=
+DEVICE_ONLINE_SECONDS=
+LEASE_TTL_SECONDS=
+ADAPTER_VERSION=
+CORS_ORIGINS=
 SENTIMENT_PROVIDER=
 SENTIMENT_MODEL=
+SENTIMENT_BASE_URL=
 SENTIMENT_API_KEY=
-SENTIMENT_DAILY_BUDGET=
-FACEBOOK_JOB_TIMEOUT_MINUTES=
-DATA_RETENTION_DAYS=
-LOG_LEVEL=
+SENTIMENT_TOPIC=Vinsmart Future
+ALLOW_HEURISTIC_FALLBACK=
 ```
 
-Không đưa Facebook username/password/cookie vào `.env`.
+`SENTIMENT_MODEL` mặc định hiện tại là `gpt-5.6-terra` và có thể đổi bằng env. Không đưa Facebook username/password/cookie hoặc API key thật vào Git.
 
 ## 20. Chiến lược kiểm thử
 
@@ -950,7 +995,7 @@ Không đưa Facebook username/password/cookie vào `.env`.
 
 ### 20.3. Extension test
 
-- Playwright Chromium với trang fixture mô phỏng:
+- Vitest + JSDOM với trang fixture mô phỏng:
   - danh sách group;
   - group search result;
   - post rút gọn;
@@ -965,6 +1010,16 @@ Không đưa Facebook username/password/cookie vào `.env`.
 - Không gửi field nhạy cảm trong batch.
 
 CI không tự crawl Facebook thật. Live UAT chỉ chạy thủ công trong phạm vi đã được cho phép.
+
+### 20.6. Kết quả gần nhất
+
+| Thành phần | Số test pass |
+|---|---:|
+| Web | 3 |
+| Extension | 62 |
+| API | 33 |
+| Worker | 7 |
+| **Tổng** | **105** |
 
 ### 20.4. Web E2E
 
@@ -1005,6 +1060,8 @@ CI không tự crawl Facebook thật. Live UAT chỉ chạy thủ công trong ph
 | M10 | Threads connector | M8 + API approval | 5–8 ngày |
 
 Facebook MVP dự kiến khoảng `41–58 developer-days`. Ba nền tảng dự kiến khoảng `52–76 developer-days`, chưa tính lead time App Review/Research access và thời gian sửa adapter khi UI nền tảng thay đổi.
+
+Trạng thái as-built: M1–M7 đã có mã chạy; M8 đang thực hiện qua fixture test, UAT DOM thật, privacy/hardening và runbook. M9–M10 chưa triển khai connector.
 
 ### 21.1. Thứ tự build chi tiết
 
@@ -1125,11 +1182,13 @@ Facebook MVP dự kiến khoảng `41–58 developer-days`. Ba nền tảng dự
 ### 22.4. Crawl
 
 - Chỉ source đã tick được đưa vào snapshot.
-- Chỉ post match ít nhất một keyword được lưu làm context; comment/reply mới là listening result.
+- Chỉ post match ít nhất một keyword được lưu; feed ưu tiên comment/reply nhưng post vẫn có trạng thái và kết quả AI riêng.
 - Post ngoài `window_start_utc..window_end_utc` không xuất hiện trong kết quả.
 - Comment chỉ được lấy từ post match.
 - Post context lưu source, URL, body, tác giả name-only/anonymous, thời gian đăng, thời gian thu thập, trạng thái parse và toàn bộ keyword khớp.
-- Comment/reply lưu thời gian comment, thời gian thu thập, quan hệ comment cha và kế thừa keyword của post context khi hiển thị/lọc.
+- Comment/reply lưu thời gian comment, thời gian thu thập, quan hệ comment cha, `observed_order` và kế thừa keyword của post context khi hiển thị/lọc.
+- Reply nhiều bậc giữ đúng cây Facebook; UI thụt theo depth thực tế và chỉ giới hạn độ rộng hiển thị, không ép dữ liệu về hai bậc.
+- Parent reply được xác định theo thứ tự ưu tiên: DOM explicit, comment root lồng gần nhất, tên người được reply trong cùng thread, rồi `comment_id` URL fallback.
 - Post/comment lưu được tên hiển thị và phân biệt `real|anonymous|unknown`.
 - Extension không nhập text, Like, Share, đăng bài hoặc gửi comment; chỉ click allowlist nút xem/tải thêm nội dung.
 - Payload có profile URL, platform author ID, username/handle hoặc avatar URL bị API từ chối; UI không tạo link từ tên tác giả.
@@ -1142,7 +1201,8 @@ Facebook MVP dự kiến khoảng `41–58 developer-days`. Ba nền tảng dự
 ### 22.5. AI
 
 - Phân tích thành công có đúng một nhãn positive/negative/neutral.
-- Chỉ `entity_type = comment` được queue/claim để phân tích.
+- `entity_type = post|comment` được queue/claim khi người dùng bấm `Phân tích tất cả`.
+- Dữ liệu mới mặc định `Chờ AI`; crawl không tự tạo request AI.
 - Có confidence, relevant, provider/model và prompt version.
 - Analysis input/provider/model/prompt/schema không đổi thì không gọi AI lại.
 - Confidence thấp được đưa vào review.
@@ -1235,20 +1295,21 @@ Một milestone chỉ hoàn tất khi:
 
 MVP chỉ được gọi là hoàn tất khi toàn bộ acceptance criteria ở mục 22 pass trong môi trường staging và UAT đã ký xác nhận.
 
-## 26. Các quyết định còn cần chủ dự án xác nhận
+## 26. Cấu hình và quyết định đang áp dụng
 
-Những mục này không chặn việc dựng foundation; giá trị trong cột “Mặc định đề xuất” sẽ được dùng nếu chưa có quyết định khác.
-
-| Quyết định | Mặc định đề xuất |
+| Quyết định | Giá trị hiện tại |
 |---|---|
 | Tên topic chuẩn | `Vinsmart Future` |
+| Tên ứng dụng | `Social Listening` |
+| Màu thương hiệu | Đỏ sáng `#E2232A` và trắng |
 | Số người dùng MVP | 1 admin |
 | Crawl thủ công hay lịch | Thủ công trong MVP |
 | Lưu tên tác giả | Có, chỉ display name; không profile link/ID/handle |
 | Retention content | 180 ngày |
 | Comment cap | 500/post |
 | AI confidence review | `< 0.60` |
-| AI provider/model | Qua `SentimentProvider`, chọn bằng env |
+| AI provider/model | OpenAI-compatible qua env; model mặc định `gpt-5.6-terra` |
+| Cách gọi AI | Nút `Phân tích tất cả`; chỉ queue dữ liệu chưa phân tích |
 | Nơi deploy | Local/staging trước; production sau UAT |
 | TikTok/Threads | Feature flag off đến khi có quyền API |
 
