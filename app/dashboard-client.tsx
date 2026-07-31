@@ -1259,7 +1259,8 @@ export function DashboardClient() {
                 <div className="facebook-comments">
                   {comments.map(({ item, depth }) => (
                     <div
-                      className={`facebook-comment${depth ? " is-reply" : ""}`}
+                      className={`facebook-comment${depth ? ` is-reply reply-depth-${Math.min(depth, 2)}` : ""}`}
+                      data-reply-depth={depth}
                       style={
                         depth
                           ? { marginLeft: `${Math.min(depth, 2) * 34}px` }

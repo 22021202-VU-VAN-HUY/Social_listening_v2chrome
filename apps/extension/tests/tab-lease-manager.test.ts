@@ -208,7 +208,7 @@ describe("TabLeaseManager", () => {
     ).rejects.toThrow(/another job/u);
   });
 
-  it("recovers once when Facebook replaces the page and closes the message channel", async () => {
+  it("recovers repeatedly when Facebook replaces the page and closes the message channel", async () => {
     class RedirectingTabs extends FakeTabs {
       public discoverAttempts = 0;
 
@@ -218,7 +218,7 @@ describe("TabLeaseManager", () => {
       ): Promise<unknown> {
         if (message.type === "DISCOVER_GROUPS") {
           this.discoverAttempts += 1;
-          if (this.discoverAttempts === 1) {
+          if (this.discoverAttempts <= 3) {
             throw new Error(
               "A listener indicated an asynchronous response by returning true, but the message channel closed before a response was received"
             );
@@ -259,7 +259,7 @@ describe("TabLeaseManager", () => {
     });
 
     expect(result).toEqual({ sources: [], coverageStatus: "unknown" });
-    expect(fakeTabs.discoverAttempts).toBe(2);
+    expect(fakeTabs.discoverAttempts).toBe(4);
     expect(fakeTabs.createCalls).toBe(1);
   });
 

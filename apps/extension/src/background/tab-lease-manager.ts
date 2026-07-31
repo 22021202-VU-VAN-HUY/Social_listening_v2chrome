@@ -75,7 +75,7 @@ function isMissingTabError(error: unknown): boolean {
   );
 }
 
-function isTransientMessageChannelError(error: unknown): boolean {
+export function isTransientMessageChannelError(error: unknown): error is Error {
   return (
     error instanceof Error &&
     /message channel closed|message port closed|receiving end does not exist|frame with id 0 was removed/u.test(
@@ -257,7 +257,8 @@ export class TabLeaseManager {
   }
 
   public async command<T>(tabId: number, command: ContentCommand): Promise<T> {
-    for (let attempt = 0; attempt < 2; attempt += 1) {
+    const maxAttempts = 4;
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
       try {
         const envelope = (await this.tabs.sendMessage(
           tabId,
@@ -268,7 +269,10 @@ export class TabLeaseManager {
         }
         return envelope.result as T;
       } catch (error) {
-        if (attempt > 0 || !isTransientMessageChannelError(error)) {
+        if (
+          attempt >= maxAttempts - 1 ||
+          !isTransientMessageChannelError(error)
+        ) {
           throw error;
         }
         const record = await this.storage.getRunner();
@@ -276,9 +280,10 @@ export class TabLeaseManager {
           throw error;
         }
         // Facebook occasionally replaces the page while a command is starting.
-        // Re-establish the read-only content channel once, then replay the
-        // idempotent command. Never open a second tab for this recovery.
-        await delay(500);
+        // Re-establish the read-only content channel, then replay the
+        // idempotent command a bounded number of times. Never open a second
+        // tab for this recovery.
+        await delay(250 * (attempt + 1));
         await this.waitUntilReady(tabId, record.runId);
       }
     }

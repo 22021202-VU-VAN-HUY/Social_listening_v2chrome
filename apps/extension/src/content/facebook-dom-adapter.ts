@@ -56,6 +56,11 @@ const COMMENT_ROOT_SELECTORS = [
   "[aria-label^='Bình luận của']"
 ] as const;
 
+const COMMENT_OWNER_SELECTOR = [
+  ...COMMENT_ROOT_SELECTORS,
+  "div[role='article']"
+].join(",");
+
 const COMMENT_END_LABELS = new Set([
   "no more comments",
   "there are no more comments",
@@ -228,6 +233,44 @@ function findFirstText(root: Element, selectors: readonly string[]): string {
   return "";
 }
 
+function isOwnedByCommentRoot(root: Element, element: Element): boolean {
+  const owner = element.closest(COMMENT_OWNER_SELECTOR);
+  return !owner || owner === root;
+}
+
+function commentAuthorFromAriaLabel(root: Element): string {
+  const label = (root.getAttribute("aria-label") ?? "")
+    .replace(/\s+/gu, " ")
+    .trim();
+  if (!label) return "";
+
+  for (const pattern of [
+    /^Bình luận dưới tên (.+?)(?: vào | lúc | · |$)/iu,
+    /^Bình luận của (.+?)(?: vào | lúc | · |$)/iu,
+    /^Comment by (.+?)(?: at | on | · |$)/iu
+  ]) {
+    const candidate = pattern.exec(label)?.[1]?.trim();
+    if (candidate) return candidate;
+  }
+  return "";
+}
+
+function findCommentBody(root: Element): string {
+  for (const selector of [
+    "[data-sl-comment-body]",
+    "[data-ad-preview='message']",
+    "[data-testid='comment_body']",
+    "span[lang]"
+  ]) {
+    for (const element of root.querySelectorAll(selector)) {
+      if (!isOwnedByCommentRoot(root, element)) continue;
+      const text = visibleText(element);
+      if (text) return text.slice(0, 50_000);
+    }
+  }
+  return "";
+}
+
 function authorFromRoot(root: Element, comment: boolean): SafeAuthorDto {
   const selectors = comment
     ? [
@@ -249,9 +292,13 @@ function authorFromRoot(root: Element, comment: boolean): SafeAuthorDto {
         "h3 a[role='link']"
       ];
 
-  let candidate = "";
+  let candidate = comment ? commentAuthorFromAriaLabel(root) : "";
   for (const selector of selectors) {
+    if (candidate) break;
     for (const element of root.querySelectorAll(selector)) {
+      if (comment && !isOwnedByCommentRoot(root, element)) {
+        continue;
+      }
       if (
         element.tagName.toLocaleLowerCase("en-US") === "a" &&
         !element.hasAttribute("data-sl-author") &&
@@ -893,13 +940,8 @@ export class FacebookDomAdapter {
   }
 
   private findCommentUrl(root: Element): string | null {
-    const ownerSelector = [
-      ...COMMENT_ROOT_SELECTORS,
-      "div[role='article']"
-    ].join(",");
-
     for (const anchor of root.querySelectorAll("a[href*='comment_id=']")) {
-      const owner = anchor.closest(ownerSelector);
+      const owner = anchor.closest(COMMENT_OWNER_SELECTOR);
       if (owner && owner !== root && root.contains(owner)) {
         continue;
       }
@@ -925,12 +967,7 @@ export class FacebookDomAdapter {
     roots.forEach((root, index) => {
       const url = this.findCommentUrl(root);
       urlsByElement.set(root, url);
-      const body = findFirstText(root, [
-        "[data-sl-comment-body]",
-        "[data-ad-preview='message']",
-        "[data-testid='comment_body']",
-        "span[lang]"
-      ]).slice(0, 50_000);
+      const body = findCommentBody(root);
       const explicitId =
         root.getAttribute("data-sl-comment-id") ??
         root.getAttribute("data-commentid") ??
@@ -949,20 +986,12 @@ export class FacebookDomAdapter {
       const externalId = idsByElement.get(root);
       if (!externalId || seen.has(externalId)) continue;
 
-      const body = findFirstText(root, [
-        "[data-sl-comment-body]",
-        "[data-ad-preview='message']",
-        "[data-testid='comment_body']",
-        "span[lang]"
-      ]).slice(0, 50_000);
+      const body = findCommentBody(root);
       if (!body) continue;
 
       let parentCommentExternalId =
         root.getAttribute("data-parent-comment-id") ?? null;
       const url = urlsByElement.get(root) ?? null;
-      if (!parentCommentExternalId && url) {
-        parentCommentExternalId = parseParentCommentExternalId(url);
-      }
       if (!parentCommentExternalId) {
         let ancestor = root.parentElement;
         while (ancestor) {
@@ -973,6 +1002,9 @@ export class FacebookDomAdapter {
           }
           ancestor = ancestor.parentElement;
         }
+      }
+      if (!parentCommentExternalId && url) {
+        parentCommentExternalId = parseParentCommentExternalId(url);
       }
 
       const timestamp = timestampFromRoot(root, this.now);

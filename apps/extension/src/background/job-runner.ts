@@ -18,7 +18,10 @@ import type {
   SafePostDto
 } from "../shared/types";
 import { EXTENSION_VERSION } from "../shared/types";
-import { TabLeaseManager } from "./tab-lease-manager";
+import {
+  isTransientMessageChannelError,
+  TabLeaseManager
+} from "./tab-lease-manager";
 
 export interface StartResult {
   accepted: boolean;
@@ -78,6 +81,14 @@ function errorFromUnknown(error: unknown): JobRunError {
       "Crawl was cancelled.",
       "interrupted",
       false
+    );
+  }
+  if (isTransientMessageChannelError(error)) {
+    return new JobRunError(
+      "FACEBOOK_CHANNEL_INTERRUPTED",
+      error.message,
+      "interrupted",
+      true
     );
   }
   return new JobRunError(

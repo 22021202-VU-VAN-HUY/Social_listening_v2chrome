@@ -690,6 +690,91 @@ describe("FacebookDomAdapter", () => {
       }
     ]);
   });
+
+  it("reads commenter names from aria labels and preserves two reply levels", () => {
+    const dom = new JSDOM(
+      `
+        <article data-sl-post>
+          <span data-sl-author>Người đăng bài</span>
+          <div data-sl-post-body>VSF cần được review.</div>
+          <a href="/groups/1/posts/post-thread/">Bài viết</a>
+
+          <div
+            role="article"
+            aria-label="Bình luận dưới tên Leo vào 2 ngày trước"
+          >
+            <span lang="vi">Bình luận cấp gốc</span>
+            <a href="/groups/1/posts/post-thread/?comment_id=comment-root">
+              2 ngày
+            </a>
+
+            <div
+              role="article"
+              aria-label="Bình luận dưới tên GrayLobster5148 vào 2 ngày trước"
+            >
+              <span lang="vi">Leo xin rì viu</span>
+              <a
+                href="/groups/1/posts/post-thread/?comment_id=comment-root&amp;reply_comment_id=reply-level-1"
+              >
+                2 ngày
+              </a>
+
+              <div
+                role="article"
+                aria-label="Bình luận của Minh Anh vào 1 ngày trước"
+              >
+                <span lang="vi">Phản hồi tiếp GrayLobster5148</span>
+                <a
+                  href="/groups/1/posts/post-thread/?comment_id=comment-root&amp;reply_comment_id=reply-level-2"
+                >
+                  1 ngày
+                </a>
+              </div>
+            </div>
+          </div>
+        </article>
+      `,
+      { url: "https://www.facebook.com/groups/1/posts/post-thread/" }
+    );
+    const adapter = new FacebookDomAdapter(
+      dom.window.document,
+      dom.window.location.href,
+      now
+    );
+
+    const comments = adapter.extractComments({
+      postExternalId: "post-thread",
+      maxComments: 10
+    });
+
+    expect(
+      comments.map((comment) => ({
+        id: comment.externalId,
+        parent: comment.parentCommentExternalId,
+        author: comment.author.authorName,
+        body: comment.body
+      }))
+    ).toEqual([
+      {
+        id: "comment-root",
+        parent: null,
+        author: "Leo",
+        body: "Bình luận cấp gốc"
+      },
+      {
+        id: "reply-level-1",
+        parent: "comment-root",
+        author: "GrayLobster5148",
+        body: "Leo xin rì viu"
+      },
+      {
+        id: "reply-level-2",
+        parent: "reply-level-1",
+        author: "Minh Anh",
+        body: "Phản hồi tiếp GrayLobster5148"
+      }
+    ]);
+  });
 });
 
 describe("keyword and anonymous normalization", () => {
