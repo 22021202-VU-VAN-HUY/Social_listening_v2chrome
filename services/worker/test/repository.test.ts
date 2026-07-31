@@ -3,7 +3,7 @@ import { test } from "node:test";
 import type pg from "pg";
 import { SentimentRepository } from "../src/sentiment/repository.js";
 
-test("claimBatch can only claim comment sentiment work", async () => {
+test("claimBatch can claim post and comment sentiment work", async () => {
   let claimSql = "";
   const client = {
     async query(sql: string) {
@@ -22,6 +22,5 @@ test("claimBatch can only claim comment sentiment work", async () => {
 
   const repository = new SentimentRepository(pool);
   assert.deepEqual(await repository.claimBatch(5), []);
-  assert.match(claimSql, /entity_type\s*=\s*'comment'/u);
-  assert.doesNotMatch(claimSql, /entity_type\s*=\s*'post'/u);
+  assert.match(claimSql, /entity_type IN \('post', 'comment'\)/u);
 });

@@ -92,7 +92,7 @@ test("crawl snapshots cannot disable or zero-out comment collection", () => {
   );
 });
 
-test("post views are context-only and cannot expose sentiment", () => {
+test("post views expose pending or completed sentiment", () => {
   const post = {
     id: "00000000-0000-4000-8000-000000000001",
     platform: "facebook",
@@ -130,7 +130,7 @@ test("post views are context-only and cannot expose sentiment", () => {
         needsReview: false,
       },
     }).success,
-    false,
+    true,
   );
 });
 

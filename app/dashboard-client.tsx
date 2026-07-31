@@ -42,6 +42,8 @@ type CommentItem = {
   postTimeParseStatus: "parsed" | "unknown";
   postAuthorName: string | null;
   postAnonymous: boolean;
+  postSentiment: Sentiment | null;
+  postConfidence: number;
   postUrl: string | null;
   keywords: string[];
 };
@@ -241,6 +243,7 @@ function normalizeComment(value: unknown): CommentItem | null {
   const commentAuthor = normalizeAuthor(record);
   const postAuthor = normalizeAuthor(post);
   const sentimentRecord = asRecord(record.sentiment);
+  const postSentimentRecord = asRecord(post.sentiment);
   const platformValue = asString(record.platform, "facebook").toLowerCase();
   const platform: CommentItem["platform"] =
     platformValue === "tiktok" || platformValue === "threads"
@@ -373,6 +376,17 @@ function normalizeComment(value: unknown): CommentItem | null {
         : "unknown",
     postAuthorName,
     postAnonymous,
+    postSentiment: sentimentOf(
+      postSentimentRecord.label ??
+        post.sentimentLabel ??
+        post.sentiment_label ??
+        post.sentiment,
+    ),
+    postConfidence: normalizeConfidence(
+      postSentimentRecord.confidence ??
+        post.sentimentConfidence ??
+        post.sentiment_confidence,
+    ),
     postUrl:
       asString(
         post.url ??
@@ -786,6 +800,7 @@ export function DashboardClient() {
       const result = asRecord(
         await apiRequest<unknown>("/sentiment/analyze-all", {
           method: "POST",
+          body: "{}",
         }),
       );
       const queued = asNumber(
@@ -800,9 +815,11 @@ export function DashboardClient() {
         kind: "success",
         message:
           queued >= 0
-            ? `Đã gửi ${queued.toLocaleString("vi-VN")} bình luận sang AI. Kết quả sẽ tự cập nhật.`
+            ? queued > 0
+              ? `Đã gửi ${queued.toLocaleString("vi-VN")} bài viết/comment chưa phân tích sang AI. Kết quả sẽ tự cập nhật.`
+              : "Không có nội dung mới cần gửi AI; các mục đã phân tích được bỏ qua để tiết kiệm token."
             : asString(result.message) ||
-              "Đã gửi toàn bộ bình luận sang AI. Kết quả sẽ tự cập nhật.",
+              "Đã gửi các nội dung chưa phân tích sang AI. Kết quả sẽ tự cập nhật.",
       });
       await refresh();
     } catch (error) {
@@ -1088,7 +1105,7 @@ export function DashboardClient() {
               className="button button-primary analyze-all-button"
               type="button"
               onClick={() => void analyzeAll()}
-              disabled={analyzingAll || snapshot.total === 0}
+              disabled={analyzingAll}
             >
               <span aria-hidden="true">{analyzingAll ? "◌" : "✦"}</span>
               {analyzingAll ? "Đang gửi phân tích…" : "Phân tích tất cả"}
@@ -1181,6 +1198,16 @@ export function DashboardClient() {
                         ? "TikTok"
                         : "Threads"}
                   </span>
+                  <div className="facebook-post-sentiment">
+                    {post.postSentiment ? (
+                      <SentimentBadge
+                        sentiment={post.postSentiment}
+                        confidence={post.postConfidence}
+                      />
+                    ) : (
+                      <span className="pending-badge">Chờ AI</span>
+                    )}
+                  </div>
                   <span className="facebook-more" aria-hidden="true">
                     •••
                   </span>

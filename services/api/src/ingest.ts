@@ -227,108 +227,6 @@ function assertPostTimeInScope(
   }
 }
 
-async function queueSentiment(
-  transaction: Transaction,
-  input: {
-    workspaceId: string;
-    jobId: string;
-    entityId: string;
-    text: string;
-    postContext: string | null;
-  },
-): Promise<void> {
-  await transaction.query(
-    `
-      INSERT INTO sentiment_queue (
-        workspace_id,
-        job_id,
-        entity_type,
-        entity_id,
-        text,
-        post_context,
-        status,
-        available_at
-      )
-      VALUES ($1, $2, 'comment', $3, $4, $5, 'queued', now())
-      ON CONFLICT (entity_type, entity_id)
-      DO UPDATE SET
-        workspace_id = EXCLUDED.workspace_id,
-        job_id = EXCLUDED.job_id,
-        text = EXCLUDED.text,
-        post_context = EXCLUDED.post_context,
-        status = 'queued',
-        attempt_count = 0,
-        available_at = now(),
-        locked_at = NULL,
-        completed_at = NULL,
-        last_error = NULL,
-        updated_at = now()
-    `,
-    [
-      input.workspaceId,
-      input.jobId,
-      input.entityId,
-      input.text,
-      input.postContext,
-    ],
-  );
-}
-
-async function requeuePostComments(
-  transaction: Transaction,
-  input: {
-    workspaceId: string;
-    jobId: string;
-    postId: string;
-    postContext: string;
-  },
-): Promise<void> {
-  await transaction.query(
-    `
-      INSERT INTO sentiment_queue (
-        workspace_id,
-        job_id,
-        entity_type,
-        entity_id,
-        text,
-        post_context,
-        status,
-        available_at
-      )
-      SELECT comment.workspace_id,
-             $2,
-             'comment',
-             comment.id,
-             comment.body,
-             $4,
-             'queued',
-             now()
-      FROM comments AS comment
-      WHERE comment.workspace_id = $1
-        AND comment.post_id = $3
-      ON CONFLICT (entity_type, entity_id)
-      DO UPDATE SET
-        workspace_id = EXCLUDED.workspace_id,
-        job_id = EXCLUDED.job_id,
-        text = EXCLUDED.text,
-        post_context = EXCLUDED.post_context,
-        status = 'queued',
-        attempt_count = 0,
-        available_at = now(),
-        locked_at = NULL,
-        completed_at = NULL,
-        last_error = NULL,
-        updated_at = now()
-    `,
-    [
-      input.workspaceId,
-      input.jobId,
-      input.postId,
-      input.postContext.slice(0, 2_000),
-    ],
-  );
-}
-
 export async function ingestSourceBatch(
   transaction: Transaction,
   workspaceId: string,
@@ -423,17 +321,6 @@ export async function ingestContentBatch(
       publishedAt: post.publishedAt,
       author,
     });
-    const previous = await transaction.query<{ id: string; body: string }>(
-      `
-        SELECT id, body
-        FROM posts
-        WHERE workspace_id = $1
-          AND platform = 'facebook'
-          AND external_id = $2
-        FOR UPDATE
-      `,
-      [workspaceId, post.externalId],
-    );
     const result = await transaction.query<{ id: string }>(
       `
         INSERT INTO posts (
@@ -526,17 +413,6 @@ export async function ingestContentBatch(
         ],
       );
     }
-    if (
-      previous.rows[0] &&
-      previous.rows[0].body !== post.body
-    ) {
-      await requeuePostComments(transaction, {
-        workspaceId,
-        jobId,
-        postId,
-        postContext: post.body,
-      });
-    }
   }
 
   const insertedComments = new Map<
@@ -601,20 +477,6 @@ export async function ingestContentBatch(
       publishedAt: comment.publishedAt,
       author,
     });
-    const previous = await transaction.query<{
-      id: string;
-      content_hash: string;
-    }>(
-      `
-        SELECT id, content_hash
-        FROM comments
-        WHERE workspace_id = $1
-          AND platform = 'facebook'
-          AND external_id = $2
-        FOR UPDATE
-      `,
-      [workspaceId, comment.externalId],
-    );
     const result = await transaction.query<{ id: string }>(
       `
         INSERT INTO comments (
@@ -677,15 +539,6 @@ export async function ingestContentBatch(
       postId: post.id,
     });
 
-    if (previous.rows[0]?.content_hash !== contentHash) {
-      await queueSentiment(transaction, {
-        workspaceId,
-        jobId,
-        entityId: commentId,
-        text: comment.body,
-        postContext: post.body.slice(0, 2_000),
-      });
-    }
   }
 
   for (const comment of insertedComments.values()) {

@@ -26,7 +26,7 @@ export class SentimentRepository {
         id: string;
         workspace_id: string;
         job_id: string | null;
-        entity_type: "comment";
+        entity_type: "post" | "comment";
         entity_id: string;
         text: string;
         post_context: string | null;
@@ -37,7 +37,7 @@ export class SentimentRepository {
             SELECT id
             FROM sentiment_queue
             WHERE status IN ('queued', 'retry_wait')
-              AND entity_type = 'comment'
+              AND entity_type IN ('post', 'comment')
               AND available_at <= NOW()
             ORDER BY created_at ASC
             FOR UPDATE SKIP LOCKED

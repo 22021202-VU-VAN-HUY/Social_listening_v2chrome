@@ -1545,7 +1545,7 @@ select:focus {
 
 .facebook-post-header {
   display: grid;
-  grid-template-columns: 40px minmax(0, 1fr) auto auto;
+  grid-template-columns: 40px minmax(0, 1fr) auto auto auto;
   align-items: center;
   gap: 10px;
   padding: 13px 15px 8px;
@@ -1598,6 +1598,11 @@ select:focus {
 .facebook-post-header .platform-pill {
   min-height: 24px;
   white-space: nowrap;
+}
+
+.facebook-post-sentiment {
+  display: flex;
+  align-items: center;
 }
 
 .facebook-more {
@@ -3180,7 +3185,7 @@ select:focus {
   }
 
   .facebook-post-header {
-    grid-template-columns: 40px minmax(0, 1fr) auto;
+    grid-template-columns: 40px minmax(0, 1fr) auto auto;
   }
 
   .facebook-post-header .platform-pill {

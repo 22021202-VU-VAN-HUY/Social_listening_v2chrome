@@ -10,7 +10,7 @@ const jobId = "00000000-0000-4000-8000-000000000003";
 const keywordId = "00000000-0000-4000-8000-000000000004";
 const taskId = "00000000-0000-4000-8000-000000000005";
 
-test("post is stored as context while only real and anonymous comments enqueue sentiment", async () => {
+test("new posts and comments stay pending until manual AI analysis", async () => {
   const calls: Array<{ sql: string; parameters: unknown[] }> = [];
   let commentSequence = 0;
   const transaction = {
@@ -147,15 +147,7 @@ test("post is stored as context while only real and anonymous comments enqueue s
   const queueCalls = calls.filter(({ sql }) =>
     sql.includes("INSERT INTO sentiment_queue"),
   );
-  assert.equal(queueCalls.length, 2, "exactly the two comments must be queued");
-  for (const call of queueCalls) {
-    assert.match(call.sql, /VALUES\s*\(\$1,\s*\$2,\s*'comment'/u);
-    assert.doesNotMatch(call.sql, /'post'/u);
-  }
-  assert.deepEqual(
-    queueCalls.map(({ parameters }) => parameters[3]),
-    ["Bình luận từ người dùng thật", "Bình luận ẩn danh"],
-  );
+  assert.equal(queueCalls.length, 0, "crawl must not spend AI tokens automatically");
 
   const commentCalls = calls.filter(({ sql }) =>
     sql.includes("INSERT INTO comments"),

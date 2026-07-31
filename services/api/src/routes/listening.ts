@@ -12,7 +12,7 @@ import { parseWith } from "../validation.js";
 
 const sentimentParamsSchema = z
   .object({
-    entityType: z.literal("comment"),
+    entityType: z.enum(["post", "comment"]),
     entityId: idSchema,
   })
   .strict();
@@ -33,6 +33,10 @@ interface ContentRow {
   post_author_name?: string | null;
   post_is_anonymous?: boolean;
   post_author_kind?: "real" | "anonymous" | "unknown";
+  post_sentiment_label?: "positive" | "negative" | "neutral" | null;
+  post_sentiment_confidence?: string | number | null;
+  post_sentiment_relevant?: boolean | null;
+  post_sentiment_needs_review?: boolean | null;
   matched_keywords?: Array<{
     id: string;
     value: string;
@@ -89,21 +93,26 @@ function filterSql(
   return { conditions, values };
 }
 
-const latestCommentSentimentSql = (entityAlias: string) => `
+const latestSentimentSql = (
+  entityType: "post" | "comment",
+  entityAlias: string,
+  analysisAlias = "analysis",
+  overrideAlias = "override",
+) => `
   LEFT JOIN LATERAL (
     SELECT label, confidence, is_relevant, needs_review
     FROM sentiment_analyses
-    WHERE entity_type = 'comment' AND entity_id = ${entityAlias}.id
+    WHERE entity_type = '${entityType}' AND entity_id = ${entityAlias}.id
     ORDER BY analyzed_at DESC
     LIMIT 1
-  ) AS analysis ON true
+  ) AS ${analysisAlias} ON true
   LEFT JOIN LATERAL (
     SELECT label
     FROM sentiment_overrides
-    WHERE entity_type = 'comment' AND entity_id = ${entityAlias}.id
+    WHERE entity_type = '${entityType}' AND entity_id = ${entityAlias}.id
     ORDER BY created_at DESC
     LIMIT 1
-  ) AS override ON true
+  ) AS ${overrideAlias} ON true
 `;
 
 export function registerListeningRoutes(
@@ -113,17 +122,45 @@ export function registerListeningRoutes(
   app.post("/api/v1/sentiment/analyze-all", async (_request, reply) => {
     const result = await context.database.query<{
       total: string;
+      pending: string;
       queued: string;
     }>(
       `
-        WITH source_comments AS (
+        WITH source_entities AS (
+          SELECT post.workspace_id,
+                 'post'::text AS entity_type,
+                 post.id AS entity_id,
+                 post.body AS text,
+                 NULL::text AS post_context
+          FROM posts AS post
+          WHERE post.workspace_id = $1
+
+          UNION ALL
+
           SELECT comment.workspace_id,
+                 'comment'::text AS entity_type,
                  comment.id AS entity_id,
                  comment.body AS text,
                  left(post.body, 2000) AS post_context
           FROM comments AS comment
           JOIN posts AS post ON post.id = comment.post_id
           WHERE comment.workspace_id = $1
+        ),
+        pending AS (
+          SELECT source.*
+          FROM source_entities AS source
+          WHERE NOT EXISTS (
+                  SELECT 1
+                  FROM sentiment_analyses AS analysis
+                  WHERE analysis.entity_type = source.entity_type
+                    AND analysis.entity_id = source.entity_id
+                )
+            AND NOT EXISTS (
+                  SELECT 1
+                  FROM sentiment_overrides AS override
+                  WHERE override.entity_type = source.entity_type
+                    AND override.entity_id = source.entity_id
+                )
         ),
         queued AS (
           INSERT INTO sentiment_queue (
@@ -137,14 +174,14 @@ export function registerListeningRoutes(
             available_at
           )
           SELECT workspace_id,
-                 'comment',
+                 entity_type,
                  entity_id,
                  text,
                  post_context,
                  'queued',
                  0,
                  now()
-          FROM source_comments
+          FROM pending
           ON CONFLICT (entity_type, entity_id)
           DO UPDATE SET
             workspace_id = EXCLUDED.workspace_id,
@@ -157,20 +194,24 @@ export function registerListeningRoutes(
             completed_at = NULL,
             last_error = NULL,
             updated_at = now()
-          WHERE sentiment_queue.status <> 'processing'
-          RETURNING entity_id
+          WHERE sentiment_queue.status = 'failed'
+          RETURNING entity_type, entity_id
         )
-        SELECT (SELECT count(*)::text FROM source_comments) AS total,
+        SELECT (SELECT count(*)::text FROM source_entities) AS total,
+               (SELECT count(*)::text FROM pending) AS pending,
                (SELECT count(*)::text FROM queued) AS queued
       `,
       [context.config.workspaceId],
     );
     const total = Number(result.rows[0]?.total ?? 0);
+    const pending = Number(result.rows[0]?.pending ?? 0);
     const queued = Number(result.rows[0]?.queued ?? 0);
     return reply.code(202).send({
       total,
+      pending,
       queued,
-      skippedProcessing: total - queued,
+      skippedAlreadyAnalyzed: total - pending,
+      skippedAlreadyQueued: pending - queued,
     });
   });
 
@@ -201,8 +242,10 @@ export function registerListeningRoutes(
       );
     }
     if (query.sentiment) {
-      // Posts are context records, never sentiment entities.
-      filters.conditions.push("false");
+      filters.values.push(query.sentiment);
+      filters.conditions.push(
+        `COALESCE(override.label, analysis.label) = $${filters.values.length}`,
+      );
     }
     filters.values.push(query.limit, query.offset);
     const result = await context.database.query<ContentRow>(
@@ -224,10 +267,19 @@ export function registerListeningRoutes(
                  keyword_context.matched_keywords,
                  '[]'::jsonb
                ) AS matched_keywords,
-               NULL::text AS sentiment_label,
-               NULL::numeric AS sentiment_confidence,
-               NULL::boolean AS sentiment_relevant,
-               NULL::boolean AS sentiment_needs_review
+               COALESCE(override.label, analysis.label) AS sentiment_label,
+               CASE
+                 WHEN override.label IS NOT NULL THEN 1
+                 ELSE analysis.confidence
+               END AS sentiment_confidence,
+               CASE
+                 WHEN override.label IS NOT NULL THEN true
+                 ELSE analysis.is_relevant
+               END AS sentiment_relevant,
+               CASE
+                 WHEN override.label IS NOT NULL THEN false
+                 ELSE analysis.needs_review
+               END AS sentiment_needs_review
         FROM posts AS post
         JOIN sources AS source ON source.id = post.source_id
         LEFT JOIN LATERAL (
@@ -243,6 +295,7 @@ export function registerListeningRoutes(
           WHERE hit.entity_type = 'post'
             AND hit.entity_id = post.id
         ) AS keyword_context ON true
+        ${latestSentimentSql("post", "post")}
         WHERE ${filters.conditions.join(" AND ")}
         ORDER BY post.collected_at DESC
         LIMIT $${filters.values.length - 1}
@@ -264,7 +317,7 @@ export function registerListeningRoutes(
         timeParseStatus: row.time_parse_status,
         author: authorFromRow(row),
         matchedKeywords: row.matched_keywords ?? [],
-        sentiment: null,
+        sentiment: sentimentFromRow(row),
       })),
     };
   });
@@ -318,6 +371,20 @@ export function registerListeningRoutes(
                post.author_name AS post_author_name,
                post.is_anonymous AS post_is_anonymous,
                post.author_kind AS post_author_kind,
+               COALESCE(post_override.label, post_analysis.label)
+                 AS post_sentiment_label,
+               CASE
+                 WHEN post_override.label IS NOT NULL THEN 1
+                 ELSE post_analysis.confidence
+               END AS post_sentiment_confidence,
+               CASE
+                 WHEN post_override.label IS NOT NULL THEN true
+                 ELSE post_analysis.is_relevant
+               END AS post_sentiment_relevant,
+               CASE
+                 WHEN post_override.label IS NOT NULL THEN false
+                 ELSE post_analysis.needs_review
+               END AS post_sentiment_needs_review,
                COALESCE(
                  keyword_context.matched_keywords,
                  '[]'::jsonb
@@ -360,7 +427,13 @@ export function registerListeningRoutes(
           WHERE hit.entity_type = 'post'
             AND hit.entity_id = post.id
         ) AS keyword_context ON true
-        ${latestCommentSentimentSql("comment")}
+        ${latestSentimentSql("comment", "comment")}
+        ${latestSentimentSql(
+          "post",
+          "post",
+          "post_analysis",
+          "post_override",
+        )}
         WHERE ${filters.conditions.join(" AND ")}
         ORDER BY comment.collected_at DESC
         LIMIT $${filters.values.length - 1}
@@ -394,6 +467,14 @@ export function registerListeningRoutes(
             authorKind: row.post_author_kind ?? "unknown",
           },
           matchedKeywords: row.matched_keywords ?? [],
+          sentiment: row.post_sentiment_label
+            ? {
+                label: row.post_sentiment_label,
+                confidence: Number(row.post_sentiment_confidence ?? 0),
+                isRelevant: row.post_sentiment_relevant ?? true,
+                needsReview: row.post_sentiment_needs_review ?? false,
+              }
+            : null,
         },
         parentCommentId: row.parent_comment_id ?? null,
         sourceId: row.source_id,
@@ -414,8 +495,10 @@ export function registerListeningRoutes(
     async (request, reply) => {
       const params = parseWith(sentimentParamsSchema, request.params);
       const override = parseWith(sentimentOverrideSchema, request.body);
+      const entityTable =
+        params.entityType === "post" ? "posts" : "comments";
       const exists = await context.database.query(
-        "SELECT 1 FROM comments WHERE id = $1 AND workspace_id = $2",
+        `SELECT 1 FROM ${entityTable} WHERE id = $1 AND workspace_id = $2`,
         [params.entityId, context.config.workspaceId],
       );
       if (!exists.rowCount) {

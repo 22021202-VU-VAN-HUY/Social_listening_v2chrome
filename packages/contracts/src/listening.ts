@@ -105,7 +105,7 @@ export const postViewSchema = z
     timeParseStatus: timeParseStatusSchema,
     author: authorSchema,
     matchedKeywords: z.array(matchedKeywordViewSchema),
-    sentiment: z.null(),
+    sentiment: sentimentViewSchema,
   })
   .strict();
 
@@ -122,6 +122,7 @@ export const commentPostContextSchema = z
     timeParseStatus: timeParseStatusSchema,
     author: authorSchema,
     matchedKeywords: z.array(matchedKeywordViewSchema),
+    sentiment: sentimentViewSchema,
   })
   .strict();
 

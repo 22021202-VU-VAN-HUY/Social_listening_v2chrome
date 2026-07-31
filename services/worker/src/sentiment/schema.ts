@@ -18,7 +18,7 @@ export type SentimentLabel = z.infer<typeof SentimentLabelSchema>;
 export type SentimentResult = z.infer<typeof SentimentResultSchema>;
 
 export interface SentimentInput {
-  entityType: "comment";
+  entityType: "post" | "comment";
   entityId: string;
   text: string;
   postContext?: string | null;
@@ -35,7 +35,7 @@ export interface SentimentQueueItem {
   id: string;
   workspaceId: string;
   jobId: string | null;
-  entityType: "comment";
+  entityType: "post" | "comment";
   entityId: string;
   text: string;
   postContext: string | null;

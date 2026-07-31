@@ -220,7 +220,7 @@ test("comment-only batches require a parent stored by this scoped job", async ()
   assert.match(parentSql ?? "", /hit\.keyword_id = \$4/u);
 });
 
-test("changing post context requeues every existing comment for analysis", async () => {
+test("changing post context does not automatically spend AI tokens", async () => {
   const { transaction, calls } = scopeTransaction({
     previousBody: "VSF - nội dung cũ",
   });
@@ -235,10 +235,5 @@ test("changing post context requeues every existing comment for analysis", async
       sql.includes("INSERT INTO sentiment_queue") &&
       sql.includes("FROM comments AS comment"),
   );
-  assert.ok(requeue);
-  assert.deepEqual(requeue.parameters.slice(0, 3), [
-    workspaceId,
-    jobId,
-    postId,
-  ]);
+  assert.equal(requeue, undefined);
 });

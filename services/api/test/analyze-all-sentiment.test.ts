@@ -5,7 +5,7 @@ import type { Database } from "../src/db.js";
 import { loadConfig } from "../src/config.js";
 import { registerListeningRoutes } from "../src/routes/listening.js";
 
-test("analyze-all requeues every workspace comment except in-flight work", async () => {
+test("analyze-all queues only posts and comments without an existing result", async () => {
   let querySql = "";
   let queryParameters: unknown[] = [];
   const database = {
@@ -13,7 +13,7 @@ test("analyze-all requeues every workspace comment except in-flight work", async
       querySql = sql;
       queryParameters = parameters;
       return {
-        rows: [{ total: "12", queued: "10" }],
+        rows: [{ total: "12", pending: "5", queued: "3" }],
         rowCount: 1,
       };
     },
@@ -31,16 +31,20 @@ test("analyze-all requeues every workspace comment except in-flight work", async
   assert.equal(response.statusCode, 202);
   assert.deepEqual(response.json(), {
     total: 12,
-    queued: 10,
-    skippedProcessing: 2,
+    pending: 5,
+    queued: 3,
+    skippedAlreadyAnalyzed: 7,
+    skippedAlreadyQueued: 2,
   });
   assert.deepEqual(queryParameters, [config.workspaceId]);
+  assert.match(querySql, /FROM posts AS post/u);
   assert.match(querySql, /FROM comments AS comment/u);
   assert.match(querySql, /JOIN posts AS post/u);
   assert.match(querySql, /comment\.workspace_id = \$1/u);
   assert.match(querySql, /left\(post\.body, 2000\) AS post_context/u);
   assert.match(
     querySql,
-    /WHERE sentiment_queue\.status <> 'processing'/u,
+    /NOT EXISTS \(\s*SELECT 1\s*FROM sentiment_analyses/u,
   );
+  assert.match(querySql, /WHERE sentiment_queue\.status = 'failed'/u);
 });

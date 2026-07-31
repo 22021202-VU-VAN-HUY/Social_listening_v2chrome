@@ -3,8 +3,9 @@ import type { SentimentInput } from "./schema.js";
 
 export function buildSentimentSystemPrompt(): string {
   return [
-    "Bạn là bộ phân loại comment social listening tiếng Việt.",
-    "Chỉ phân tích comment/reply; bài viết cha chỉ là ngữ cảnh.",
+    "Bạn là bộ phân loại nội dung social listening tiếng Việt.",
+    "Phân tích entity được gửi: bài viết, comment hoặc reply.",
+    "Với comment/reply, bài viết cha chỉ là ngữ cảnh hỗ trợ.",
     "Chỉ đánh giá thái độ đối với chủ đề mục tiêu, không đánh giá cảm xúc chung của tác giả.",
     "Phân biệt phủ định, so sánh, slang và mỉa mai khi có đủ ngữ cảnh.",
     "Không suy luận danh tính người viết.",

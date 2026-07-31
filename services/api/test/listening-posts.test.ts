@@ -6,7 +6,7 @@ import { loadConfig } from "../src/config.js";
 import type { Database } from "../src/db.js";
 import { registerListeningRoutes } from "../src/routes/listening.js";
 
-test("post route returns all matched keyword metadata and never sentiment", async () => {
+test("post route returns matched keyword metadata and sentiment status", async () => {
   let querySql = "";
   const database = {
     async query(sql: string) {
@@ -68,7 +68,12 @@ test("post route returns all matched keyword metadata and never sentiment", asyn
     item.matchedKeywords.map((keyword) => keyword.value),
     ["VSF", "Vin Future"],
   );
-  assert.equal(item.sentiment, null);
+  assert.deepEqual(item.sentiment, {
+    label: "positive",
+    confidence: 0.99,
+    isRelevant: true,
+    needsReview: false,
+  });
   assert.deepEqual(item.author, {
     authorName: null,
     isAnonymous: false,
