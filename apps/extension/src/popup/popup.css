@@ -16,7 +16,7 @@ body {
   min-height: 520px;
   margin: 0;
   background:
-    radial-gradient(circle at 12% 0%, rgba(215, 25, 32, 0.14), transparent 32%),
+    radial-gradient(circle at 12% 0%, rgba(226, 35, 42, 0.1), transparent 32%),
     #fff7f7;
 }
 
@@ -43,10 +43,10 @@ header {
   height: 42px;
   place-items: center;
   overflow: hidden;
-  border: 1px solid rgba(215, 25, 32, 0.2);
+  border: 1px solid rgba(226, 35, 42, 0.18);
   border-radius: 12px;
-  background: #d71920;
-  box-shadow: 0 8px 20px rgba(151, 12, 19, 0.18);
+  background: #e2232a;
+  box-shadow: 0 8px 20px rgba(180, 21, 29, 0.14);
 }
 
 .brand-mark img {
@@ -72,7 +72,7 @@ h2 {
 
 .eyebrow {
   margin-bottom: 3px;
-  color: #a51c22;
+  color: #c72a31;
   font-size: 9px;
   font-weight: 800;
   letter-spacing: 0.15em;
@@ -181,8 +181,8 @@ input {
 }
 
 input:focus {
-  border-color: #d71920;
-  box-shadow: 0 0 0 3px rgba(215, 25, 32, 0.14);
+  border-color: #e2232a;
+  box-shadow: 0 0 0 3px rgba(226, 35, 42, 0.12);
 }
 
 .message {
@@ -222,7 +222,7 @@ input:focus {
 
 .button--primary {
   color: #ffffff;
-  background: #d71920;
+  background: #e2232a;
 }
 
 .button--danger {
