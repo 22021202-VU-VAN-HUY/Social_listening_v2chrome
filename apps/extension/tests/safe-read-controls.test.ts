@@ -35,10 +35,13 @@ describe("Facebook read-only control gate", () => {
     expect(isSafeReadControlLabel("comments", "View more replies")).toBe(true);
     expect(isSafeReadControlLabel("comments", "View 1 more reply")).toBe(true);
     expect(isSafeReadControlLabel("comments", "View 12 more replies")).toBe(true);
+    expect(isSafeReadControlLabel("comments", "View 12 replies")).toBe(true);
     expect(isSafeReadControlLabel("comments", "Xem thêm phản hồi")).toBe(true);
     expect(isSafeReadControlLabel("comments", "Xem thêm 12 phản hồi")).toBe(
       true
     );
+    expect(isSafeReadControlLabel("comments", "Xem 1 phản hồi")).toBe(true);
+    expect(isSafeReadControlLabel("comments", "Xem 12 phản hồi")).toBe(true);
     expect(isSafeReadControlLabel("comments", "View more comments")).toBe(true);
   });
 
@@ -50,9 +53,7 @@ describe("Facebook read-only control gate", () => {
     "View 12 more replies Send",
     "Xem thêm phản hồi và trả lời",
     "Xem thêm 12 phản hồi rồi bình luận",
-    "Xem 12 phản hồi",
-    "View replies",
-    "View 12 replies"
+    "View replies"
   ])("rejects near-match control label %s", (label) => {
     expect(isSafeReadControlLabel("comments", label)).toBe(false);
     expect(isSafeReadControlLabel("comment_filter_trigger", label)).toBe(false);

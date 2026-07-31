@@ -190,9 +190,20 @@ function parseCommentExternalId(url: string): string | null {
   try {
     const parsed = new URL(url);
     return (
-      parsed.searchParams.get("comment_id") ??
-      parsed.searchParams.get("reply_comment_id")
+      parsed.searchParams.get("reply_comment_id") ??
+      parsed.searchParams.get("comment_id")
     );
+  } catch {
+    return null;
+  }
+}
+
+function parseParentCommentExternalId(url: string): string | null {
+  try {
+    const parsed = new URL(url);
+    return parsed.searchParams.has("reply_comment_id")
+      ? parsed.searchParams.get("comment_id")
+      : null;
   } catch {
     return null;
   }
@@ -794,15 +805,14 @@ export class FacebookDomAdapter {
     return posts;
   }
 
-  private findCommentRoots(): Element[] {
+  private queryCommentRoots(scope: ParentNode): Element[] {
     const explicit = uniqueElements(
       COMMENT_ROOT_SELECTORS.flatMap((selector) => [
-        ...this.document.querySelectorAll(selector)
+        ...scope.querySelectorAll(selector)
       ])
     );
-    if (explicit.length > 0) return explicit;
-
-    return [...this.document.querySelectorAll("div[role='article']")].filter(
+    const explicitSet = new Set(explicit);
+    const fallback = [...scope.querySelectorAll("div[role='article']")].filter(
       (element) =>
         Boolean(
           element.querySelector(
@@ -811,8 +821,50 @@ export class FacebookDomAdapter {
         ) &&
         !element.querySelector(
           "[data-ad-rendering-role='story_message'], [data-sl-post-body]"
+        ) &&
+        !explicit.some(
+          (commentRoot) =>
+            commentRoot !== element && element.contains(commentRoot)
         )
     );
+
+    return uniqueElements([...explicit, ...fallback]).filter(
+      (element) =>
+        explicitSet.has(element) ||
+        !element.querySelector(
+          "[data-ad-rendering-role='story_message'], [data-sl-post-body]"
+        )
+    );
+  }
+
+  private findCommentRoots(postExternalId: string): Element[] {
+    const matchingPostRoots = this.findPostRoots().filter((root) => {
+      const postUrl = this.findPostUrl(root);
+      return postUrl
+        ? parsePostExternalId(postUrl) === postExternalId
+        : false;
+    });
+    const pagePostExternalId = parsePostExternalId(this.pageUrl);
+
+    return this.queryCommentRoots(this.document).filter((root) => {
+      const url = this.findCommentUrl(root);
+      if (url) {
+        return parsePostExternalId(url) === postExternalId;
+      }
+
+      if (
+        matchingPostRoots.some(
+          (postRoot) => postRoot === root || postRoot.contains(root)
+        )
+      ) {
+        return true;
+      }
+
+      return (
+        matchingPostRoots.length === 0 &&
+        pagePostExternalId === postExternalId
+      );
+    });
   }
 
   public hasExplicitCommentEnd(): boolean {
@@ -823,7 +875,16 @@ export class FacebookDomAdapter {
   }
 
   private findCommentUrl(root: Element): string | null {
+    const ownerSelector = [
+      ...COMMENT_ROOT_SELECTORS,
+      "div[role='article']"
+    ].join(",");
+
     for (const anchor of root.querySelectorAll("a[href*='comment_id=']")) {
+      const owner = anchor.closest(ownerSelector);
+      if (owner && owner !== root && root.contains(owner)) {
+        continue;
+      }
       const href = readHref(anchor);
       if (!href) continue;
       const canonical = canonicalCommentUrl(
@@ -839,11 +900,13 @@ export class FacebookDomAdapter {
   public extractComments(options: CommentExtractionOptions): SafeCommentDto[] {
     const comments: SafeCommentDto[] = [];
     const seen = new Set<string>();
-    const roots = this.findCommentRoots();
+    const roots = this.findCommentRoots(options.postExternalId);
     const idsByElement = new Map<Element, string>();
+    const urlsByElement = new Map<Element, string | null>();
 
     roots.forEach((root, index) => {
       const url = this.findCommentUrl(root);
+      urlsByElement.set(root, url);
       const body = findFirstText(root, [
         "[data-sl-comment-body]",
         "[data-ad-preview='message']",
@@ -878,6 +941,10 @@ export class FacebookDomAdapter {
 
       let parentCommentExternalId =
         root.getAttribute("data-parent-comment-id") ?? null;
+      const url = urlsByElement.get(root) ?? null;
+      if (!parentCommentExternalId && url) {
+        parentCommentExternalId = parseParentCommentExternalId(url);
+      }
       if (!parentCommentExternalId) {
         let ancestor = root.parentElement;
         while (ancestor) {
@@ -891,7 +958,6 @@ export class FacebookDomAdapter {
       }
 
       const timestamp = timestampFromRoot(root, this.now);
-      const url = this.findCommentUrl(root);
       seen.add(externalId);
       comments.push({
         externalId,

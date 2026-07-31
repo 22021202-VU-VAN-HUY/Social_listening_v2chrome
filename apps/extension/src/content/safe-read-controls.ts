@@ -9,7 +9,7 @@ const SAFE_LABEL_PATTERNS: Record<SafeReadControlMode, RegExp> = {
   groups: /^(see more|show more|xem them|hien thi them)$/u,
   posts: /^(see more|xem them)$/u,
   comments:
-    /^(view more comments|view previous comments|more comments|xem them binh luan|xem binh luan truoc|view more replies|view \d+ more repl(?:y|ies)|xem them phan hoi|xem them \d+ phan hoi)$/u,
+    /^(view more comments|view previous comments|more comments|xem them binh luan|xem binh luan truoc|view more replies|view \d+ (?:more )?repl(?:y|ies)|xem them phan hoi|xem (?:them )?\d+ phan hoi)$/u,
   comment_filter_trigger: /^(most relevant|phu hop nhat)$/u,
   comment_filter_option: /^(all comments|tat ca binh luan)$/u
 };

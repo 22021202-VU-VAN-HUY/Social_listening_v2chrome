@@ -192,10 +192,16 @@ describe("FacebookDomAdapter", () => {
       windowEndUtc: "2026-07-30T03:00:00.000Z",
       maxPosts: 10
     });
-    const comments = adapter.extractComments({
-      postExternalId: "anonymous-post-vi",
-      maxComments: 10
-    });
+    const comments = [
+      ...adapter.extractComments({
+        postExternalId: "anonymous-post-vi",
+        maxComments: 10
+      }),
+      ...adapter.extractComments({
+        postExternalId: "anonymous-post-en",
+        maxComments: 10
+      })
+    ];
 
     expect(posts).toHaveLength(2);
     expect(comments).toHaveLength(2);
@@ -323,7 +329,20 @@ describe("FacebookDomAdapter", () => {
       windowEndUtc: null,
       maxPosts: 10
     });
-    const extractedComments = adapter.extractComments({
+    const commentDom = new JSDOM(
+      [...dom.window.document.querySelectorAll("[data-sl-comment]")]
+        .map((element) => element.outerHTML)
+        .join(""),
+      {
+        url: "https://www.facebook.com/groups/1/posts/post-absolute/"
+      }
+    );
+    const commentAdapter = new FacebookDomAdapter(
+      commentDom.window.document,
+      commentDom.window.location.href,
+      now
+    );
+    const extractedComments = commentAdapter.extractComments({
       postExternalId: "post-absolute",
       maxComments: 10
     });
@@ -397,10 +416,16 @@ describe("FacebookDomAdapter", () => {
       windowEndUtc: null,
       maxPosts: 10
     });
-    const comments = adapter.extractComments({
-      postExternalId: "post-time-vi",
-      maxComments: 10
-    });
+    const comments = [
+      ...adapter.extractComments({
+        postExternalId: "post-time-vi",
+        maxComments: 10
+      }),
+      ...adapter.extractComments({
+        postExternalId: "post-time-en",
+        maxComments: 10
+      })
+    ];
 
     expect(
       posts.map((post) => [
@@ -550,6 +575,84 @@ describe("FacebookDomAdapter", () => {
       }
     });
     expect(JSON.stringify({ posts, comments })).not.toContain("profile.handle");
+  });
+
+  it("keeps comments scoped to their post and maps sibling replies to the parent", () => {
+    const dom = new JSDOM(
+      `
+        <article data-sl-post>
+          <span data-sl-author>Người tham gia ẩn danh</span>
+          <div data-sl-post-body>VINSMART FUTURE là bài A.</div>
+          <a href="/groups/1/posts/post-a/">Bài A</a>
+
+          <div data-sl-comment>
+            <span data-sl-comment-author>Leo</span>
+            <div data-sl-comment-body>Bình luận của bài A.</div>
+            <a href="/groups/1/posts/post-a/?comment_id=comment-a">
+              2 ngày
+            </a>
+          </div>
+          <div data-sl-comment>
+            <span data-sl-comment-author>GrayLobster5148</span>
+            <div data-sl-comment-body>Leo xin rì viu</div>
+            <a
+              href="/groups/1/posts/post-a/?comment_id=comment-a&amp;reply_comment_id=reply-a"
+            >
+              2 ngày
+            </a>
+          </div>
+        </article>
+
+        <article data-sl-post>
+          <span data-sl-author>Nguyễn B</span>
+          <div data-sl-post-body>VINSMART FUTURE là bài B.</div>
+          <a href="/groups/1/posts/post-b/">Bài B</a>
+          <div data-sl-comment>
+            <span data-sl-comment-author>Người của bài B</span>
+            <div data-sl-comment-body>Không được gắn vào bài A.</div>
+            <a href="/groups/1/posts/post-b/?comment_id=comment-b">
+              1 ngày
+            </a>
+          </div>
+        </article>
+      `,
+      { url: "https://www.facebook.com/groups/1/search/?q=Vinsmart%20Future" }
+    );
+    const adapter = new FacebookDomAdapter(
+      dom.window.document,
+      dom.window.location.href,
+      now
+    );
+
+    const comments = adapter.extractComments({
+      postExternalId: "post-a",
+      maxComments: 10
+    });
+
+    expect(
+      comments.map((comment) => ({
+        id: comment.externalId,
+        parent: comment.parentCommentExternalId,
+        post: comment.postExternalId,
+        author: comment.author.authorName,
+        body: comment.body
+      }))
+    ).toEqual([
+      {
+        id: "comment-a",
+        parent: null,
+        post: "post-a",
+        author: "Leo",
+        body: "Bình luận của bài A."
+      },
+      {
+        id: "reply-a",
+        parent: "comment-a",
+        post: "post-a",
+        author: "GrayLobster5148",
+        body: "Leo xin rì viu"
+      }
+    ]);
   });
 });
 
