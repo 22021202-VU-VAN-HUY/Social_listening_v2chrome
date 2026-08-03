@@ -613,6 +613,61 @@ describe("FacebookDomAdapter", () => {
     expect(JSON.stringify({ posts, comments })).not.toContain("profile.handle");
   });
 
+  it("extracts the background-text permalink DOM from example2 with its keyword", () => {
+    const pageUrl =
+      "https://www.facebook.com/groups/782850425639223/posts/2100043157253270/";
+    const dom = new JSDOM(
+      `
+        <div data-ad-rendering-role="story_message">
+          <div style="background-image: url('facebook-background.jpg')">
+            <div aria-hidden="true">
+              <div>Anh em bên Vinsmart Future còn thở không vậy</div>
+            </div>
+            <div>
+              <div>Anh em bên Vinsmart Future còn thở không vậy</div>
+            </div>
+          </div>
+        </div>
+        <div role="article" aria-label="Bình luận dưới tên Người dùng">
+          <span lang="vi">Một bình luận</span>
+          <a href="/groups/782850425639223/posts/2100043157253270/?comment_id=2100053100585609">
+            8 tuần
+          </a>
+        </div>
+      `,
+      { url: pageUrl }
+    );
+    const keywordId = "44444444-4444-4444-8444-444444444444";
+    const adapter = new FacebookDomAdapter(
+      dom.window.document,
+      dom.window.location.href,
+      now
+    );
+
+    const posts = adapter.extractPosts({
+      sourceExternalId: "782850425639223",
+      keywords: [
+        {
+          id: keywordId,
+          value: "Vinsmart Future",
+          matchMode: "contains_phrase"
+        }
+      ],
+      windowStartUtc: null,
+      windowEndUtc: null,
+      maxPosts: 10
+    });
+
+    expect(posts).toHaveLength(1);
+    expect(posts[0]).toMatchObject({
+      externalId: "2100043157253270",
+      sourceExternalId: "782850425639223",
+      url: pageUrl,
+      body: "Anh em bên Vinsmart Future còn thở không vậy",
+      matchedKeywordIds: [keywordId]
+    });
+  });
+
   it("keeps comments scoped to their post and maps sibling replies to the parent", () => {
     const dom = new JSDOM(
       `

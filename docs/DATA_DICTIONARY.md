@@ -2,10 +2,10 @@
 
 ## Nguyên tắc phạm vi
 
-- `post` được lưu làm metadata/ngữ cảnh cha của comment, không phải đối tượng sentiment.
-- `comment` bao gồm cả bình luận cấp đầu và reply. Đây là đối tượng listening duy nhất được
-  đưa vào AI để phân loại `positive`, `negative` hoặc `neutral`.
-- Keyword được khớp trên bài viết. Mỗi comment trả về toàn bộ keyword đã khớp của post cha.
+- `post` vừa là metadata/ngữ cảnh của comment vừa có thể được phân tích sentiment riêng.
+- `comment` bao gồm cả bình luận cấp đầu và reply. Post/comment/reply chỉ được đưa vào AI
+  khi người dùng chủ động bấm `Phân tích tất cả`.
+- Keyword được khớp trên bài post. Mỗi comment trả về toàn bộ keyword đã khớp của bài post.
 - Mọi timestamp là ISO 8601 có múi giờ. Không suy đoán thời gian khi Facebook không cung cấp
   đủ thông tin.
 
@@ -26,7 +26,7 @@ Quy tắc bắt buộc:
 
 Không thu thập profile URL, platform user ID, username, handle hoặc avatar URL.
 
-## Metadata bài viết cha
+## Metadata bài post
 
 Được lưu trong bảng `posts` và trả về tại `comment.post`.
 
@@ -43,6 +43,7 @@ Không thu thập profile URL, platform user ID, username, handle hoặc avatar 
 | `timeParseStatus` | `posts.time_parse_status` | `parsed` hoặc `unknown`. |
 | `author` | ba cột author | Tác giả theo closed privacy shape ở trên. |
 | `matchedKeywords` | `keyword_hits` + `keywords` | Tất cả keyword khớp, không chỉ keyword đầu tiên. |
+| `sentiment` | `sentiment_analyses` / override | Kết quả AI của bài post, hoặc `null` khi chờ xử lý. |
 
 Mỗi phần tử `matchedKeywords` gồm `id`, `value` và `matchMode`
 (`whole_word` hoặc `contains_phrase`). `value` và `matchMode` được đóng băng ngay
@@ -57,7 +58,7 @@ Thao tác xóa keyword trên API là soft-disable để không làm mất hit c�
 | --- | --- | --- |
 | `id` | `comments.id` | UUID nội bộ. |
 | `externalId` | `comments.external_id` | ID comment trên nền tảng. |
-| `postId` / `postExternalId` | quan hệ `post_id` | Bài viết cha. |
+| `postId` / `postExternalId` | quan hệ `post_id` | Bài post. |
 | `parentCommentId` | `comments.parent_comment_id` | `null` với comment cấp đầu; có giá trị với reply. |
 | `url` | `comments.canonical_url` | Permalink comment nếu DOM cung cấp, nếu không là `null`. |
 | `body` | `comments.body` | Nội dung comment/reply. |
@@ -66,7 +67,7 @@ Thao tác xóa keyword trên API là soft-disable để không làm mất hit c�
 | `timeParseStatus` | `comments.time_parse_status` | `parsed` hoặc `unknown`. |
 | `author` | ba cột author | Người dùng thật, ẩn danh hoặc chưa xác định. |
 | `sentiment` | `sentiment_analyses` / override | Kết quả AI, hoặc `null` khi đang chờ xử lý. |
-| `post` | quan hệ bài viết | Toàn bộ metadata bài viết cha và keyword đã khớp. |
+| `post` | quan hệ bài viết | Toàn bộ metadata bài post và keyword đã khớp. |
 
 ## Sentiment
 
@@ -77,8 +78,13 @@ Thao tác xóa keyword trên API là soft-disable để không làm mất hit c�
 | `isRelevant` | `boolean` | Comment có liên quan đến ngữ cảnh/keyword hay không. |
 | `needsReview` | `boolean` | Cần người vận hành kiểm tra thủ công. |
 
-Ràng buộc ở contract, API, queue, worker và PostgreSQL chỉ chấp nhận
-`entity_type='comment'`. Post không được queue, phân tích hoặc override sentiment.
+Queue và worker chấp nhận `entity_type='post'` hoặc `entity_type='comment'`.
+Khi phân tích comment/reply:
+
+- `post_context` chứa nội dung bài post để xác định đối tượng;
+- `conversation_context` chứa chuỗi reply cha tối đa 8 cấp;
+- worker chỉ chấm `text` của entity hiện tại, không sao chép sắc thái từ ngữ cảnh;
+- prompt nhận diện các alias `VSF`, `VinSmart Future`, `VinFuture`, `Vin Future`.
 
 ## Ràng buộc scope crawl
 

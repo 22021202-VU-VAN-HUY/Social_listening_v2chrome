@@ -22,6 +22,7 @@ export interface SentimentInput {
   entityId: string;
   text: string;
   postContext?: string | null;
+  conversationContext?: string | null;
   topic: string;
 }
 
@@ -39,5 +40,6 @@ export interface SentimentQueueItem {
   entityId: string;
   text: string;
   postContext: string | null;
+  conversationContext: string | null;
   attemptCount: number;
 }

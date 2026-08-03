@@ -46,4 +46,4 @@ next-env.d.ts
 /work/
 
 # Local Facebook DOM snapshots may contain observed user content.
-example.html
+example*.html

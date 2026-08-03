@@ -30,4 +30,44 @@ describe("HeuristicSentimentProvider", () => {
     assert.equal(result.isRelevant, true);
     assert.equal(result.label, "negative");
   });
+
+  it("does not inherit a positive label from the post context", async () => {
+    const result = await provider.analyze({
+      entityType: "comment",
+      entityId: "comment-neutral-1",
+      text: "Thông tin được đăng lúc mấy giờ?",
+      postContext: "VSF tổ chức chương trình tuyệt vời và rất ý nghĩa",
+      topic: "Vinsmart Future",
+    });
+
+    assert.equal(result.isRelevant, false);
+    assert.equal(result.label, "neutral");
+  });
+
+  it("understands a negated positive phrase aimed at VSF", async () => {
+    const result = await provider.analyze({
+      entityType: "comment",
+      entityId: "comment-negative-2",
+      text: "VSF lần này không tốt và thiếu minh bạch",
+      postContext: "Thông báo mới từ VSF",
+      topic: "Vinsmart Future",
+    });
+
+    assert.equal(result.isRelevant, true);
+    assert.equal(result.label, "negative");
+  });
+
+  it("uses the reply thread only to resolve the target", async () => {
+    const result = await provider.analyze({
+      entityType: "comment",
+      entityId: "reply-positive-1",
+      text: "Không tệ, mình ủng hộ",
+      postContext: "Bài post thảo luận giải thưởng VSF",
+      conversationContext: "Bạn nghĩ thế nào về hoạt động của VSF?",
+      topic: "Vinsmart Future",
+    });
+
+    assert.equal(result.isRelevant, true);
+    assert.equal(result.label, "positive");
+  });
 });

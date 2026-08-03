@@ -41,7 +41,11 @@ test("analyze-all queues only posts and comments without an existing result", as
   assert.match(querySql, /FROM comments AS comment/u);
   assert.match(querySql, /JOIN posts AS post/u);
   assert.match(querySql, /comment\.workspace_id = \$1/u);
-  assert.match(querySql, /left\(post\.body, 2000\) AS post_context/u);
+  assert.match(querySql, /WITH RECURSIVE reply_ancestors/u);
+  assert.match(querySql, /ancestry\.depth < 8/u);
+  assert.match(querySql, /left\(post\.body, 4000\) AS post_context/u);
+  assert.match(querySql, /reply_context\.conversation_context/u);
+  assert.match(querySql, /conversation_context = EXCLUDED\.conversation_context/u);
   assert.match(
     querySql,
     /NOT EXISTS \(\s*SELECT 1\s*FROM sentiment_analyses/u,

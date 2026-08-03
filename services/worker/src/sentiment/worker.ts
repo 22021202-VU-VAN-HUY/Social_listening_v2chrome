@@ -32,6 +32,7 @@ export class SentimentWorker {
           entityId: item.entityId,
           text: item.text,
           postContext: item.postContext,
+          conversationContext: item.conversationContext,
           topic: this.config.SENTIMENT_TOPIC,
         } as const;
         const inputHash = createAnalysisInputHash(input);

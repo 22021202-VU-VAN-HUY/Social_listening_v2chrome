@@ -30,6 +30,7 @@ export class SentimentRepository {
         entity_id: string;
         text: string;
         post_context: string | null;
+        conversation_context: string | null;
         attempt_count: number;
       }>(
         `
@@ -57,6 +58,7 @@ export class SentimentRepository {
                     queue.entity_id,
                     queue.text,
                     queue.post_context,
+                    queue.conversation_context,
                     queue.attempt_count
         `,
         [limit],
@@ -70,6 +72,7 @@ export class SentimentRepository {
         entityId: row.entity_id,
         text: row.text,
         postContext: row.post_context,
+        conversationContext: row.conversation_context,
         attemptCount: row.attempt_count,
       }));
     } catch (error) {

@@ -22,6 +22,27 @@ describe("createAnalysisInputHash", () => {
     assert.notEqual(first, second);
   });
 
+  it("changes when a reply has different conversation context", () => {
+    const first = createAnalysisInputHash({
+      entityType: "comment",
+      entityId: "reply-1",
+      text: "Không đồng ý",
+      postContext: "Bài post về VSF",
+      conversationContext: "VSF làm chương trình rất tốt",
+      topic: "Vinsmart Future",
+    });
+    const second = createAnalysisInputHash({
+      entityType: "comment",
+      entityId: "reply-2",
+      text: "Không đồng ý",
+      postContext: "Bài post về VSF",
+      conversationContext: "VSF làm chương trình rất tệ",
+      topic: "Vinsmart Future",
+    });
+
+    assert.notEqual(first, second);
+  });
+
   it("normalizes equivalent whitespace and unicode input", () => {
     const first = createAnalysisInputHash({
       entityType: "comment",

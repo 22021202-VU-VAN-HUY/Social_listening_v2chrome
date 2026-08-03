@@ -1,6 +1,12 @@
 import "dotenv/config";
 import { z } from "zod";
 
+const OptionalNonEmptyString = z.preprocess(
+  (value) =>
+    typeof value === "string" && value.trim() === "" ? undefined : value,
+  z.string().trim().min(1).optional(),
+);
+
 const ConfigSchema = z.object({
   DATABASE_URL: z
     .string()
@@ -10,12 +16,31 @@ const ConfigSchema = z.object({
   WORKER_BATCH_SIZE: z.coerce.number().int().min(1).max(50).default(5),
   WORKER_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(20).default(5),
   SENTIMENT_PROVIDER: z
-    .enum(["heuristic", "openai-compatible", "ollama"])
-    .default("heuristic"),
+    .enum([
+      "auto",
+      "heuristic",
+      "openai-compatible",
+      "gemini",
+      "mimo",
+      "ollama",
+    ])
+    .default("auto"),
   SENTIMENT_MODEL: z.string().min(1).default("sentiment-development"),
-  SENTIMENT_API_KEY: z.string().optional(),
+  SENTIMENT_API_KEY: OptionalNonEmptyString,
   SENTIMENT_BASE_URL: z.string().url().default("http://localhost:11434"),
-  SENTIMENT_TOPIC: z.string().min(1).default("Vinsmart Future"),
+  OPENAI_API_KEY: OptionalNonEmptyString,
+  OPENAI_MODEL: z.string().min(1).default("gpt-5.6-terra"),
+  OPENAI_BASE_URL: z.string().url().default("https://api.openai.com/v1"),
+  GEMINI_API_KEY: OptionalNonEmptyString,
+  GEMINI_MODEL: z.string().min(1).default("gemini-3.6-flash"),
+  GEMINI_BASE_URL: z
+    .string()
+    .url()
+    .default("https://generativelanguage.googleapis.com/v1beta/openai"),
+  MIMO_API_KEY: OptionalNonEmptyString,
+  MIMO_MODEL: z.string().min(1).default("mimo-v2.5-pro"),
+  MIMO_BASE_URL: z.string().url().default("https://api.xiaomimimo.com/v1"),
+  SENTIMENT_TOPIC: z.string().min(1).default("VinSmart Future"),
   SENTIMENT_CONFIDENCE_REVIEW_THRESHOLD: z.coerce
     .number()
     .min(0)

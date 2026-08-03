@@ -39,11 +39,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       <aside className="sidebar" aria-label="Điều hướng chính">
         <Link className="brand" href="/" aria-label="Social Listening — trang tổng quan">
           <span className="brand-mark">
-            <img src="/social-listening-logo.png" alt="" />
-          </span>
-          <span>
-            <strong>Social Listening</strong>
-            <small>Vinsmart Future</small>
+            <img src="/vinsmart-future-symbol.png" alt="" />
           </span>
         </Link>
 
@@ -84,7 +80,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       <div className="workspace">
         <header className="topbar">
           <div>
-            <p className="eyebrow">Vinsmart Future · Social Listening</p>
+            <p className="eyebrow">VinSmart Future · Social Listening</p>
             <h1>{pageTitle(pathname)}</h1>
           </div>
           <div className="topbar-meta">

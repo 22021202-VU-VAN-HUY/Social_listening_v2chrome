@@ -759,7 +759,7 @@ export function SettingsClient() {
           <span className="section-kicker">Control plane</span>
           <h2>Chọn đúng nguồn, nghe đúng tín hiệu</h2>
           <p>
-            Extension lọc từ khóa rồi lưu đầy đủ metadata/ngữ cảnh bài cha
+            Extension lọc từ khóa rồi lưu đầy đủ metadata/ngữ cảnh bài post
             cùng bình luận và phản hồi. Hệ thống không tự đăng bài, bình luận,
             like hay thực hiện tương tác Facebook.
           </p>
@@ -1037,7 +1037,7 @@ export function SettingsClient() {
                 <span className="section-kicker">Lọc trước khi lưu</span>
                 <h3>Từ khóa theo dõi</h3>
                 <p>
-                  Từ khóa được đối chiếu trên bài cha. Post khớp được lưu làm
+                  Từ khóa được đối chiếu trên bài post. Post khớp được lưu làm
                   metadata/ngữ cảnh đầy đủ cho comment; comment/reply vẫn là
                   dữ liệu listening chính.
                 </p>
@@ -1082,7 +1082,7 @@ export function SettingsClient() {
                 <input
                   value={keywordInput}
                   onChange={(event) => setKeywordInput(event.target.value)}
-                  placeholder="Ví dụ: Vinsmart Future"
+                  placeholder="Ví dụ: VinSmart Future"
                   maxLength={100}
                 />
               </label>
@@ -1101,7 +1101,7 @@ export function SettingsClient() {
               <div className="section-number">04</div>
               <div>
                 <span className="section-kicker">Phạm vi thu thập</span>
-                <h3>Thời gian bài cha & bình luận</h3>
+                <h3>Thời gian bài post & bình luận</h3>
                 <p>
                   Áp dụng cho lần lấy comment/reply tiếp theo trên các group đã chọn.
                 </p>
@@ -1109,7 +1109,7 @@ export function SettingsClient() {
             </div>
 
             <fieldset className="lookback-options">
-              <legend>Xét bài cha được đăng từ</legend>
+              <legend>Xét bài post được đăng từ</legend>
               {[
                 [0, "Hôm nay", "Từ 00:00 đến hiện tại"],
                 [3, "3 ngày", "Theo dõi ngắn hạn"],

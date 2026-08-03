@@ -410,7 +410,7 @@ export function JobsClient() {
             <div className="pipeline">
               {[
                 ["Quét post", activeJob.postsScanned, "Đối chiếu từ khóa"],
-                ["Lưu post cha", activeJob.postsMatched, "Metadata/ngữ cảnh"],
+                ["Lưu bài post", activeJob.postsMatched, "Metadata/ngữ cảnh"],
                 ["Lưu comment", activeJob.commentsSaved, "Gồm reply và ẩn danh"],
                 [
                   "AI sentiment",
@@ -522,7 +522,7 @@ export function JobsClient() {
                   <span>Kết quả</span>
                   <strong>
                     {job.type === "crawl"
-                      ? `${job.commentsSaved} comment/reply · post cha lưu ngữ cảnh`
+                      ? `${job.commentsSaved} comment/reply · bài post lưu ngữ cảnh`
                       : job.step}
                   </strong>
                 </div>

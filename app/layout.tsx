@@ -24,9 +24,9 @@ export async function generateMetadata(): Promise<Metadata> {
       ? "http"
       : "https");
   const origin = `${protocol}://${host}`;
-  const title = "Social Listening — Vinsmart Future";
+  const title = "Social Listening — VinSmart Future";
   const description =
-    "Theo dõi bình luận, phản hồi và sắc thái thảo luận về Vinsmart Future trên mạng xã hội.";
+    "Theo dõi bình luận, phản hồi và sắc thái thảo luận về VinSmart Future trên mạng xã hội.";
   const socialImage = `${origin}/og.png`;
 
   return {
@@ -37,10 +37,10 @@ export async function generateMetadata(): Promise<Metadata> {
     },
     description,
     applicationName: "Social Listening",
-    keywords: ["Vinsmart Future", "social listening", "Facebook", "sentiment"],
+    keywords: ["VinSmart Future", "social listening", "Facebook", "sentiment"],
     icons: {
-      icon: "/social-listening-logo.png",
-      apple: "/social-listening-logo.png",
+      icon: "/vinsmart-future-symbol.png",
+      apple: "/vinsmart-future-symbol.png",
     },
     openGraph: {
       type: "website",
@@ -48,7 +48,7 @@ export async function generateMetadata(): Promise<Metadata> {
       siteName: "Social Listening",
       title,
       description,
-      images: [{ url: socialImage, width: 1200, height: 630, alt: title }],
+      images: [{ url: socialImage, width: 1734, height: 907, alt: title }],
     },
     twitter: {
       card: "summary_large_image",

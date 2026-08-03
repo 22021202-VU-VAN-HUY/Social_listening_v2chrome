@@ -6,7 +6,7 @@ Nó không phải bot tương tác và không được tạo nội dung trên Fa
 ## Dữ liệu được đọc
 
 - danh sách group mà tài khoản hiện tại đã tham gia và có quyền xem;
-- metadata bài viết cha khớp keyword:
+- metadata bài post khớp keyword:
   - group/source;
   - external ID và permalink bài;
   - nội dung bài;

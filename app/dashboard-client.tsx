@@ -20,6 +20,12 @@ import {
   readActiveJobId,
   unwrapItems,
 } from "./lib/api";
+import {
+  openSocialListeningPrintWindow,
+  printSocialListeningReport,
+  type PdfReportPost,
+  type SocialListeningPdfReport,
+} from "./lib/pdf-report";
 
 type CommentItem = {
   id: string;
@@ -46,6 +52,21 @@ type CommentItem = {
   postSentiment: Sentiment | null;
   postConfidence: number;
   postUrl: string | null;
+  keywords: string[];
+};
+
+type PostItem = {
+  id: string;
+  platform: "facebook" | "tiktok" | "threads";
+  source: string;
+  authorName: string | null;
+  anonymous: boolean;
+  content: string;
+  sentiment: Sentiment | null;
+  confidence: number;
+  publishedAt: string | null;
+  collectedAt: string | null;
+  url: string | null;
   keywords: string[];
 };
 
@@ -291,7 +312,7 @@ function normalizeComment(value: unknown): CommentItem | null {
         record.post_title ??
         record.postBody ??
         record.post_body,
-    ) || (postId ? `Bài cha ${postId}` : "Bài cha chưa có nội dung tóm tắt");
+    ) || (postId ? `Bài post ${postId}` : "Bài post chưa có nội dung tóm tắt");
   const keywordCandidates = [
     record.matchedKeywords,
     record.matched_keywords,
@@ -428,6 +449,81 @@ function normalizeComment(value: unknown): CommentItem | null {
       ) || null,
     keywords: keywords.length ? keywords : ["Chưa xác định"],
   };
+}
+
+function normalizePost(value: unknown): PostItem | null {
+  const record = asRecord(value);
+  const content = asString(
+    record.body ?? record.content ?? record.text ?? record.message,
+  );
+  const id = asString(record.id ?? record.externalId ?? record.external_id);
+  if (!id || !content) return null;
+  const author = normalizeAuthor(record);
+  const sentimentRecord = asRecord(record.sentiment);
+  const platformValue = asString(record.platform, "facebook").toLowerCase();
+  const platform: PostItem["platform"] =
+    platformValue === "tiktok" || platformValue === "threads"
+      ? platformValue
+      : "facebook";
+  const keywordCandidates = [
+    record.matchedKeywords,
+    record.matched_keywords,
+    record.keywords,
+    record.keywordHits,
+    record.keyword_hits,
+  ];
+  const keywords = [
+    ...new Set(keywordCandidates.flatMap((entry) => keywordValues(entry))),
+  ];
+
+  return {
+    id,
+    platform,
+    source:
+      asString(record.sourceName ?? record.source_name) ||
+      nestedName(record, "source") ||
+      "Nguồn chưa xác định",
+    authorName: author.name,
+    anonymous: author.anonymous,
+    content,
+    sentiment: sentimentOf(
+      sentimentRecord.label ??
+        record.sentimentLabel ??
+        record.sentiment_label ??
+        record.sentiment,
+    ),
+    confidence: normalizeConfidence(
+      sentimentRecord.confidence ??
+        record.sentimentConfidence ??
+        record.sentiment_confidence,
+    ),
+    publishedAt: asString(record.publishedAt ?? record.published_at) || null,
+    collectedAt: asString(record.collectedAt ?? record.collected_at) || null,
+    url:
+      asString(
+        record.url ??
+          record.originalUrl ??
+          record.original_url ??
+          record.permalink,
+      ) || null,
+    keywords: keywords.length ? keywords : ["Chưa xác định"],
+  };
+}
+
+async function fetchAllListeningItems(path: string): Promise<unknown[]> {
+  const pageSize = 200;
+  const collected: unknown[] = [];
+  for (let offset = 0; ; offset += pageSize) {
+    const separator = path.includes("?") ? "&" : "?";
+    const page = unwrapItems(
+      await apiRequest<unknown>(
+        `${path}${separator}limit=${pageSize}&offset=${offset}`,
+      ),
+    );
+    collected.push(...page);
+    if (page.length < pageSize) break;
+  }
+  return collected;
 }
 
 function buildTimeline(items: CommentItem[]): TimelinePoint[] {
@@ -674,6 +770,101 @@ function isTerminalJob(status: string): boolean {
   ].includes(status.toLowerCase());
 }
 
+function buildPdfReport(
+  posts: PostItem[],
+  comments: CommentItem[],
+  summary: Pick<
+    DashboardSnapshot,
+    | "comments"
+    | "replies"
+    | "pending"
+    | "positive"
+    | "neutral"
+    | "negative"
+  >,
+): SocialListeningPdfReport {
+  const commentsByPost = new Map<string, CommentItem[]>();
+  for (const comment of comments) {
+    const postComments = commentsByPost.get(comment.postId) ?? [];
+    postComments.push(comment);
+    commentsByPost.set(comment.postId, postComments);
+  }
+
+  const reportPosts: PdfReportPost[] = posts.map((post) => ({
+    id: post.id,
+    platform: post.platform,
+    source: post.source,
+    author: authorLabel(post.authorName, post.anonymous),
+    text: post.content,
+    sentiment: post.sentiment,
+    confidence: post.confidence,
+    publishedAt: post.publishedAt,
+    collectedAt: post.collectedAt,
+    url: post.url,
+    keywords: post.keywords,
+    comments: orderCommentThread(commentsByPost.get(post.id) ?? []).map(
+      ({ item, depth }) => ({
+        author: authorLabel(item.authorName, item.anonymous),
+        text: item.content,
+        sentiment: item.sentiment,
+        confidence: item.confidence,
+        publishedAt: item.commentPublishedAt,
+        depth,
+      }),
+    ),
+  }));
+
+  const knownPostIds = new Set(reportPosts.map((post) => post.id));
+  for (const [postId, postComments] of commentsByPost) {
+    if (knownPostIds.has(postId) || !postComments.length) continue;
+    const sample = postComments[0]!;
+    reportPosts.push({
+      id: postId,
+      platform: sample.platform,
+      source: sample.source,
+      author: authorLabel(sample.postAuthorName, sample.postAnonymous),
+      text: sample.postContext,
+      sentiment: sample.postSentiment,
+      confidence: sample.postConfidence,
+      publishedAt: sample.postPublishedAt,
+      collectedAt: sample.postCollectedAt,
+      url: sample.postUrl,
+      keywords: [
+        ...new Set(postComments.flatMap((comment) => comment.keywords)),
+      ],
+      comments: orderCommentThread(postComments).map(({ item, depth }) => ({
+        author: authorLabel(item.authorName, item.anonymous),
+        text: item.content,
+        sentiment: item.sentiment,
+        confidence: item.confidence,
+        publishedAt: item.commentPublishedAt,
+        depth,
+      })),
+    });
+  }
+
+  reportPosts.sort((left, right) => {
+    const leftTime = Date.parse(left.publishedAt ?? left.collectedAt ?? "");
+    const rightTime = Date.parse(right.publishedAt ?? right.collectedAt ?? "");
+    return (Number.isFinite(rightTime) ? rightTime : 0) -
+      (Number.isFinite(leftTime) ? leftTime : 0);
+  });
+
+  return {
+    generatedAt: new Date().toISOString(),
+    totals: {
+      posts: reportPosts.length,
+      comments: summary.comments,
+      replies: summary.replies,
+      pending: summary.pending,
+      positive: summary.positive,
+      neutral: summary.neutral,
+      negative: summary.negative,
+    },
+    posts: reportPosts,
+  };
+}
+
 export function DashboardClient() {
   const [snapshot, setSnapshot] = useState<DashboardSnapshot | null>(null);
   const [activeJob, setActiveJob] = useState<ActiveJob | null>(null);
@@ -684,7 +875,12 @@ export function DashboardClient() {
   const [sentiment, setSentiment] = useState("all");
   const [query, setQuery] = useState("");
   const [analyzingAll, setAnalyzingAll] = useState(false);
+  const [exportingPdf, setExportingPdf] = useState(false);
   const [analysisNotice, setAnalysisNotice] = useState<{
+    kind: "success" | "error";
+    message: string;
+  } | null>(null);
+  const [reportNotice, setReportNotice] = useState<{
     kind: "success" | "error";
     message: string;
   } | null>(null);
@@ -865,6 +1061,59 @@ export function DashboardClient() {
     }
   }, [analyzingAll, refresh]);
 
+  const exportPdf = useCallback(async () => {
+    if (exportingPdf) return;
+    const printWindow = openSocialListeningPrintWindow();
+    if (!printWindow) {
+      setReportNotice({
+        kind: "error",
+        message:
+          "Trình duyệt đã chặn cửa sổ bản in. Hãy cho phép pop-up cho trang này rồi thử lại.",
+      });
+      return;
+    }
+    setExportingPdf(true);
+    setReportNotice(null);
+    try {
+      const [postValues, commentValues, summaryValue] = await Promise.all([
+        fetchAllListeningItems(
+          "/listening/posts?includeUnknownTime=true",
+        ),
+        fetchAllListeningItems(
+          "/listening/comments?includeUnknownTime=true",
+        ),
+        apiRequest<unknown>("/dashboard/summary"),
+      ]);
+      const posts = postValues
+        .map(normalizePost)
+        .filter((post): post is PostItem => post !== null);
+      const comments = commentValues
+        .map(normalizeComment)
+        .filter((comment): comment is CommentItem => comment !== null);
+      const fallback = buildSnapshot(comments);
+      const summary = normalizeSummary(summaryValue, fallback);
+      await printSocialListeningReport(
+        buildPdfReport(posts, comments, summary),
+        printWindow,
+      );
+      setReportNotice({
+        kind: "success",
+        message: `Đã mở bản in gồm cơ cấu sắc thái và ${posts.length.toLocaleString("vi-VN")} bài post. Chọn “Save as PDF” hoặc “Lưu dưới dạng PDF” trong hộp thoại in.`,
+      });
+    } catch (error) {
+      printWindow.close();
+      setReportNotice({
+        kind: "error",
+        message:
+          error instanceof Error
+            ? `Không thể xuất PDF: ${error.message}`
+            : "Không thể xuất báo cáo PDF lúc này.",
+      });
+    } finally {
+      setExportingPdf(false);
+    }
+  }, [exportingPdf]);
+
   if (!snapshot) {
     return (
       <div className="page-loading" role="status" aria-live="polite">
@@ -898,14 +1147,23 @@ export function DashboardClient() {
       <section className="page-intro">
         <div>
           <span className="section-kicker">Tín hiệu từ comment & reply</span>
-          <h2>Người dùng đang nói gì về Vinsmart Future?</h2>
+          <h2>Người dùng đang nói gì về VinSmart Future?</h2>
           <p>
-            Bình luận và phản hồi là dữ liệu listening chính. Bài cha được lưu
+            Bình luận và phản hồi là dữ liệu listening chính. Bài post được lưu
             đầy đủ metadata/ngữ cảnh gồm nguồn, URL, nội dung, tác giả dạng
             name-only, thời gian đăng/thu thập và keyword khớp.
           </p>
         </div>
         <div className="intro-actions">
+          <button
+            className="button button-secondary report-export-button"
+            type="button"
+            onClick={() => void exportPdf()}
+            disabled={exportingPdf}
+          >
+            <span aria-hidden="true">{exportingPdf ? "◌" : "⇩"}</span>
+            {exportingPdf ? "Đang dựng bản in…" : "Xuất / In PDF"}
+          </button>
           <a className="button button-secondary" href="/settings">
             Chỉnh nguồn crawl
           </a>
@@ -921,6 +1179,18 @@ export function DashboardClient() {
         lastUpdated={lastUpdated ? `Cập nhật ${lastUpdated}` : undefined}
       />
 
+      {reportNotice && (
+        <div
+          className={`analysis-notice analysis-${reportNotice.kind}`}
+          role={reportNotice.kind === "error" ? "alert" : "status"}
+        >
+          <span aria-hidden="true">
+            {reportNotice.kind === "success" ? "✓" : "!"}
+          </span>
+          {reportNotice.message}
+        </div>
+      )}
+
       <section className="kpi-grid" aria-label="Chỉ số bình luận">
         <article className="metric-card metric-total">
           <span className="metric-label">Comment đã lọc</span>
@@ -928,7 +1198,7 @@ export function DashboardClient() {
           <p>
             <span>{snapshot.comments.toLocaleString("vi-VN")} bình luận</span>
             <span>{snapshot.replies.toLocaleString("vi-VN")} phản hồi</span>
-            <span>{snapshot.posts.toLocaleString("vi-VN")} bài cha</span>
+            <span>{snapshot.posts.toLocaleString("vi-VN")} bài post</span>
             {snapshot.unknownTime > 0 && (
               <span>
                 {snapshot.unknownTime.toLocaleString("vi-VN")} chưa rõ thời gian
@@ -1166,7 +1436,7 @@ export function DashboardClient() {
             <input
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              placeholder="Tìm comment, bài cha, nguồn, từ khóa…"
+              placeholder="Tìm comment, bài post, nguồn, từ khóa…"
             />
           </label>
           <label>

@@ -12,7 +12,7 @@ const database = new pg.Pool({
 const defaults = [
   { value: "VSF", normalized: "vsf", matchMode: "whole_word" },
   {
-    value: "vinsmart Future",
+    value: "VinSmart Future",
     normalized: "vinsmart future",
     matchMode: "contains_phrase",
   },
@@ -24,7 +24,7 @@ try {
   await database.query(
     `
       INSERT INTO workspaces (id, name, timezone, retention_days)
-      VALUES ($1, 'Vinsmart Future Listening', 'Asia/Ho_Chi_Minh', 180)
+      VALUES ($1, 'VinSmart Future Listening', 'Asia/Ho_Chi_Minh', 180)
       ON CONFLICT (id) DO UPDATE SET updated_at = now()
     `,
     [config.workspaceId],

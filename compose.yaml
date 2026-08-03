@@ -71,11 +71,20 @@ services:
     environment:
       NODE_ENV: production
       DATABASE_URL: postgres://listening:listening@postgres:5432/listening
-      SENTIMENT_PROVIDER: ${SENTIMENT_PROVIDER:-openai-compatible}
-      SENTIMENT_MODEL: ${SENTIMENT_MODEL:-gpt-5.6-terra}
-      SENTIMENT_BASE_URL: ${SENTIMENT_BASE_URL:-https://api.openai.com/v1}
+      SENTIMENT_PROVIDER: ${SENTIMENT_PROVIDER:-auto}
+      SENTIMENT_MODEL: ${SENTIMENT_MODEL:-sentiment-development}
+      SENTIMENT_BASE_URL: ${SENTIMENT_BASE_URL:-http://localhost:11434}
       SENTIMENT_API_KEY: ${SENTIMENT_API_KEY:-}
-      SENTIMENT_TOPIC: Vinsmart Future
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5.6-terra}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.6-flash}
+      GEMINI_BASE_URL: ${GEMINI_BASE_URL:-https://generativelanguage.googleapis.com/v1beta/openai}
+      MIMO_API_KEY: ${MIMO_API_KEY:-}
+      MIMO_BASE_URL: ${MIMO_BASE_URL:-https://api.xiaomimimo.com/v1}
+      MIMO_MODEL: ${MIMO_MODEL:-mimo-v2.5-pro}
+      SENTIMENT_TOPIC: VinSmart Future
       ALLOW_HEURISTIC_FALLBACK: ${ALLOW_HEURISTIC_FALLBACK:-false}
     depends_on:
       migrate:

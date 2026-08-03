@@ -241,6 +241,32 @@ function findFirstText(root: Element, selectors: readonly string[]): string {
   return "";
 }
 
+function textWithoutAriaHidden(element: Element): string {
+  const clone = element.cloneNode(true) as Element;
+  for (const hidden of clone.querySelectorAll("[aria-hidden='true']")) {
+    hidden.remove();
+  }
+  return (clone.textContent ?? "").replace(/\s+/gu, " ").trim();
+}
+
+function findPostBody(root: Element): string {
+  const standardBody = findFirstText(root, [
+    "[data-sl-post-body]",
+    "[data-ad-preview='message']",
+    "[data-testid='post_message']"
+  ]);
+  if (standardBody) return standardBody;
+
+  for (const story of root.querySelectorAll(
+    "[data-ad-rendering-role='story_message']"
+  )) {
+    if (story.closest("[aria-hidden='true']")) continue;
+    const text = textWithoutAriaHidden(story);
+    if (text) return text;
+  }
+  return "";
+}
+
 function isOwnedByCommentRoot(root: Element, element: Element): boolean {
   const owner = element.closest(COMMENT_OWNER_SELECTOR);
   return !owner || owner === root;
@@ -815,10 +841,18 @@ export class FacebookDomAdapter {
   }
 
   public findPostRoots(): Element[] {
+    const permalinkRoot =
+      canonicalPostUrl(this.pageUrl) &&
+      this.document.querySelector("[data-ad-rendering-role='story_message']")
+        ? this.document.documentElement
+        : null;
     const candidates = uniqueElements(
-      POST_ROOT_SELECTORS.flatMap((selector) => [
-        ...this.document.querySelectorAll(selector)
-      ])
+      [
+        ...POST_ROOT_SELECTORS.flatMap((selector) => [
+          ...this.document.querySelectorAll(selector)
+        ]),
+        ...(permalinkRoot ? [permalinkRoot] : [])
+      ]
     );
 
     return candidates.filter((candidate) => {
@@ -842,6 +876,9 @@ export class FacebookDomAdapter {
       const canonical = canonicalPostUrl(new URL(href, this.pageUrl).toString());
       if (canonical) return canonical;
     }
+    if (root.querySelector("[data-ad-rendering-role='story_message']")) {
+      return canonicalPostUrl(this.pageUrl);
+    }
     return null;
   }
 
@@ -854,11 +891,7 @@ export class FacebookDomAdapter {
       const externalId = url ? parsePostExternalId(url) : null;
       if (!url || !externalId || seen.has(externalId)) continue;
 
-      const body = findFirstText(root, [
-        "[data-sl-post-body]",
-        "[data-ad-preview='message']",
-        "[data-testid='post_message']"
-      ]).slice(0, 100_000);
+      const body = findPostBody(root).slice(0, 100_000);
       if (!body) continue;
 
       const matched = options.keywords.filter((keyword) =>

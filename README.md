@@ -1,10 +1,10 @@
 # listening_socialmediav2
 
-Ứng dụng Social Listening cho chủ đề Vinsmart Future. Bản MVP thu
-thập comment/reply Facebook qua Chrome Extension; bài viết cha vẫn được lưu đủ
+Ứng dụng Social Listening cho chủ đề VinSmart Future. Bản MVP thu
+thập comment/reply Facebook qua Chrome Extension; bài post vẫn được lưu đủ
 metadata để lọc keyword và làm ngữ cảnh. Web là control plane để cấu hình, chạy
-job, theo dõi tiến độ mỗi 5 giây và xem sentiment comment
-`positive | negative | neutral`.
+job, theo dõi tiến độ mỗi 5 giây, xem sentiment
+`positive | negative | neutral` và xuất báo cáo PDF.
 
 TikTok và Threads đã có màn hình cấu hình nhưng connector được khóa cho tới khi
 có API/quyền truy cập phù hợp.
@@ -20,7 +20,8 @@ Chrome Extension ────────────┘                Sentimen
 
 - `app/`: dashboard, jobs và settings.
 - `services/api/`: API, migration, seed, job lease/fencing và ingest.
-- `services/worker/`: hàng đợi chỉ phân tích sentiment comment/reply.
+- `services/worker/`: phân tích lập trường của post/comment/reply đối với VSF,
+  có ngữ cảnh bài post và chuỗi reply cha.
 - `apps/extension/`: Chrome Manifest V3, Facebook DOM adapter và tab runner.
 - `packages/contracts/`: Zod contract dùng chung.
 - `compose.yaml`: PostgreSQL, migrate, API, worker và web.
@@ -44,8 +45,24 @@ Sau khi các healthcheck đạt:
 - API ready: `http://localhost:4000/health/ready`
 - PostgreSQL: `localhost:5432`
 
-Stack development mặc định dùng bộ phân loại heuristic để chạy hoàn toàn local.
-Muốn dùng AI thật, sao chép `.env.example` thành `.env` và cấu hình một trong:
+Sao chép `.env.example` thành `.env`. Chế độ `auto` ưu tiên OpenAI; nếu không
+khoá OpenAI thì tự dùng Gemini, rồi MiMo; nếu cả ba đều thiếu thì chỉ dùng heuristic
+khi `ALLOW_HEURISTIC_FALLBACK=true`:
+
+```env
+SENTIMENT_PROVIDER=auto
+OPENAI_API_KEY=<openai-api-key-hoặc-để-trống>
+OPENAI_MODEL=gpt-5.6-terra
+GEMINI_API_KEY=<gemini-api-key-hoặc-để-trống>
+GEMINI_MODEL=gemini-3.6-flash
+MIMO_API_KEY=<mimo-api-key-hoặc-để-trống>
+MIMO_BASE_URL=https://api.xiaomimimo.com/v1
+MIMO_MODEL=mimo-v2.5-pro
+ALLOW_HEURISTIC_FALLBACK=true
+```
+
+Khóa OpenAI cũ trong `SENTIMENT_API_KEY` vẫn được hỗ trợ để tương thích ngược.
+Muốn chạy hoàn toàn local với Ollama, dùng:
 
 ```env
 SENTIMENT_PROVIDER=ollama
@@ -53,21 +70,18 @@ SENTIMENT_MODEL=<model-name>
 SENTIMENT_BASE_URL=http://ollama:11434
 ```
 
-hoặc:
-
-```env
-SENTIMENT_PROVIDER=openai-compatible
-SENTIMENT_MODEL=gpt-5.6-terra
-SENTIMENT_BASE_URL=https://api.openai.com/v1
-SENTIMENT_API_KEY=<paste-your-openai-api-key>
-ALLOW_HEURISTIC_FALLBACK=false
-```
-
 Không commit `.env` hoặc secret.
 
 Với Docker, nút **Phân tích tất cả** trên Listening feed sẽ đưa toàn bộ
-comment/reply vào hàng đợi. Worker chỉ gửi nội dung comment và ngữ cảnh bài
-cha sang OpenAI; API key không được gửi xuống trình duyệt.
+post/comment/reply chưa có kết quả vào hàng đợi. Worker chỉ chấm thái độ của
+entity hiện tại đối với VSF; ngữ cảnh bài post và chuỗi reply cha chỉ dùng để
+giải nghĩa câu trả lời ngắn, phủ định hoặc mỉa mai. Khóa OpenAI/Gemini/MiMo chỉ tồn
+tại worker và không được gửi xuống trình duyệt.
+
+Nút **Xuất / In PDF** trên dashboard tải toàn bộ dữ liệu theo từng trang API,
+sau đó dựng bản in HTML/CSS sát giao diện feed: KPI, cơ cấu/tỷ lệ sắc thái
+comment, toàn bộ card bài post và cây comment/reply thụt bậc. Trong hộp thoại
+in của trình duyệt, chọn **Save as PDF** hoặc **Lưu dưới dạng PDF**.
 
 ## Chạy từng phần khi phát triển
 
@@ -151,12 +165,14 @@ link hồ sơ người dùng; query tracking như `fbclid` và `utm_*` được 
 2. `Lấy danh sách group` tạo discovery job.
 3. Extension claim lease, mở một tab nền, đọc group đã join và gửi batch.
 4. Người dùng tick group, chỉnh keyword và khoảng `hôm nay / 3 / 7 / 30 ngày`.
-5. Crawl job tìm post khớp keyword, lưu metadata bài cha rồi lấy comment/reply.
-6. API kiểm lại source/task/window và keyword từ snapshot, upsert chống trùng,
-   rồi chỉ đẩy comment/reply vào sentiment queue.
-7. Worker phân loại comment; dashboard đọc PostgreSQL và refresh mỗi 5 giây.
+5. Crawl job tìm post khớp keyword, lưu metadata bài post rồi lấy comment/reply.
+6. API kiểm lại source/task/window và keyword từ snapshot, upsert chống trùng;
+   crawl không tự tiêu tốn lượt AI.
+7. Khi người dùng bấm `Phân tích tất cả`, API queue post/comment/reply chưa có
+   kết quả; worker phân tích lập trường đối với VSF.
+8. Dashboard đọc PostgreSQL, refresh mỗi 5 giây và cho phép xuất PDF.
 
-Bốn keyword seed mặc định: `VSF`, `vinsmart Future`, `Vinfuture`, `Vin Future`.
+Bốn keyword seed mặc định: `VSF`, `VinSmart Future`, `Vinfuture`, `Vin Future`.
 
 ## Kiểm tra
 
@@ -193,8 +209,8 @@ Các test bao gồm:
 - Không dùng để né rate limit, checkpoint, CAPTCHA hoặc cơ chế bảo vệ nền tảng.
 - Kết quả là nội dung quan sát được qua UI tại thời điểm crawl, không phải cam
   kết bao phủ 100% dữ liệu Facebook.
-- Post chỉ là context/metadata; KPI và sentiment listening chỉ tính
-  comment/reply.
+- Post có sentiment riêng để hiển thị trên feed; KPI cơ cấu sắc thái chính vẫn
+  chỉ tính comment/reply.
 - Frontend không tạo dữ liệu demo khi API offline; màn hình để trống và báo lỗi
   kết nối. Dữ liệu chỉ xuất hiện từ API/PostgreSQL/extension thật.
 - Trước production cần chốt retention, quyền truy cập, điều khoản nền tảng,

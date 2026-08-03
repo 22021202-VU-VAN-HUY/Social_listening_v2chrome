@@ -127,12 +127,50 @@ export function registerListeningRoutes(
       queued: string;
     }>(
       `
-        WITH source_entities AS (
+        WITH RECURSIVE reply_ancestors AS (
+          SELECT child.id AS descendant_id,
+                 parent.id AS ancestor_id,
+                 parent.parent_comment_id,
+                 parent.body,
+                 1 AS depth
+          FROM comments AS child
+          JOIN comments AS parent
+            ON parent.id = child.parent_comment_id
+          WHERE child.workspace_id = $1
+            AND parent.workspace_id = $1
+
+          UNION ALL
+
+          SELECT ancestry.descendant_id,
+                 parent.id AS ancestor_id,
+                 parent.parent_comment_id,
+                 parent.body,
+                 ancestry.depth + 1
+          FROM reply_ancestors AS ancestry
+          JOIN comments AS parent
+            ON parent.id = ancestry.parent_comment_id
+          WHERE ancestry.depth < 8
+            AND parent.workspace_id = $1
+        ),
+        reply_context AS (
+          SELECT descendant_id,
+                 jsonb_agg(
+                   jsonb_build_object(
+                     'level', depth,
+                     'text', left(body, 1500)
+                   )
+                   ORDER BY depth DESC
+                 )::text AS conversation_context
+          FROM reply_ancestors
+          GROUP BY descendant_id
+        ),
+        source_entities AS (
           SELECT post.workspace_id,
                  'post'::text AS entity_type,
                  post.id AS entity_id,
                  post.body AS text,
-                 NULL::text AS post_context
+                 NULL::text AS post_context,
+                 NULL::text AS conversation_context
           FROM posts AS post
           WHERE post.workspace_id = $1
 
@@ -142,9 +180,12 @@ export function registerListeningRoutes(
                  'comment'::text AS entity_type,
                  comment.id AS entity_id,
                  comment.body AS text,
-                 left(post.body, 2000) AS post_context
+                 left(post.body, 4000) AS post_context,
+                 reply_context.conversation_context
           FROM comments AS comment
           JOIN posts AS post ON post.id = comment.post_id
+          LEFT JOIN reply_context
+            ON reply_context.descendant_id = comment.id
           WHERE comment.workspace_id = $1
         ),
         pending AS (
@@ -170,6 +211,7 @@ export function registerListeningRoutes(
             entity_id,
             text,
             post_context,
+            conversation_context,
             status,
             attempt_count,
             available_at
@@ -179,6 +221,7 @@ export function registerListeningRoutes(
                  entity_id,
                  text,
                  post_context,
+                 conversation_context,
                  'queued',
                  0,
                  now()
@@ -188,6 +231,7 @@ export function registerListeningRoutes(
             workspace_id = EXCLUDED.workspace_id,
             text = EXCLUDED.text,
             post_context = EXCLUDED.post_context,
+            conversation_context = EXCLUDED.conversation_context,
             status = 'queued',
             attempt_count = 0,
             available_at = now(),

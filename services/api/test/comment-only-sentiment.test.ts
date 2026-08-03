@@ -88,7 +88,7 @@ test("new posts and comments stay pending until manual AI analysis", async () =>
         externalId: "post-context-1",
         sourceId,
         url: "https://www.facebook.com/groups/group/posts/post-context-1",
-        body: "VSF là ngữ cảnh bài viết cha",
+        body: "VSF là ngữ cảnh bài post",
         publishedAt: timestamp,
         collectedAt: timestamp,
         timeParseStatus: "parsed",

@@ -10,10 +10,15 @@ interface ProviderOptions {
   baseUrl: string;
   apiKey: string | undefined;
   model: string;
+  name?: string;
 }
 
 function isGpt56Model(model: string): boolean {
   return /^gpt-5\.6(?:$|-)/u.test(model);
+}
+
+function isGeminiModel(model: string): boolean {
+  return /^gemini-/u.test(model);
 }
 
 function stripCodeFence(value: string): string {
@@ -26,7 +31,7 @@ function stripCodeFence(value: string): string {
 export class OpenAICompatibleSentimentProvider
   implements SentimentProvider
 {
-  readonly name = "openai-compatible";
+  readonly name: string;
   readonly model: string;
   private readonly baseUrl: string;
   private readonly apiKey: string | undefined;
@@ -35,6 +40,7 @@ export class OpenAICompatibleSentimentProvider
     this.baseUrl = options.baseUrl.replace(/\/+$/u, "");
     this.apiKey = options.apiKey;
     this.model = options.model;
+    this.name = options.name ?? "openai-compatible";
   }
 
   async analyze(input: SentimentInput): Promise<SentimentResult> {
@@ -43,7 +49,9 @@ export class OpenAICompatibleSentimentProvider
       ...(
         isGpt56Model(this.model)
           ? { reasoning_effort: "none" }
-          : { temperature: 0 }
+          : isGeminiModel(this.model)
+            ? { reasoning_effort: "low" }
+            : { temperature: 0 }
       ),
       response_format: { type: "json_object" },
       messages: [
