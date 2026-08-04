@@ -29,7 +29,6 @@ export type SocialListeningPdfReport = {
   totals: {
     posts: number;
     comments: number;
-    replies: number;
     pending: number;
     positive: number;
     neutral: number;
@@ -148,7 +147,7 @@ function postHtml(post: PdfReportPost, index: number): string {
         ${originalUrl ? `<a href="${escapeHtml(originalUrl)}">Mở bài viết gốc ↗</a>` : ""}
       </div>
       <div class="comment-summary">
-        <span>${post.comments.length.toLocaleString("vi-VN")} bình luận và phản hồi</span>
+        <span>${post.comments.length.toLocaleString("vi-VN")} bình luận</span>
         <span>Chỉ đọc · Không tương tác</span>
       </div>
       <div class="comments">${comments}</div>
@@ -217,7 +216,7 @@ export function buildSocialListeningPrintHtml(
     <section class="summary-grid">
       <div class="metric"><b>${report.totals.posts.toLocaleString("vi-VN")}</b><span>Bài post</span></div>
       <div class="metric"><b>${report.totals.comments.toLocaleString("vi-VN")}</b><span>Bình luận</span></div>
-      <div class="metric"><b>${report.totals.replies.toLocaleString("vi-VN")}</b><span>Phản hồi</span></div>
+      <div class="metric"><b>${analyzed.toLocaleString("vi-VN")}</b><span>Đã phân tích</span></div>
       <div class="metric"><b>${report.totals.pending.toLocaleString("vi-VN")}</b><span>Chờ AI</span></div>
     </section>
     <section class="sentiment-panel">
@@ -231,7 +230,7 @@ export function buildSocialListeningPrintHtml(
         </div>
       </div>
     </section>
-    <div class="feed-title"><h2>Toàn bộ bài post</h2><span>${report.posts.length.toLocaleString("vi-VN")} bài · ${report.totals.comments + report.totals.replies} comment/reply</span></div>
+    <div class="feed-title"><h2>Toàn bộ bài post</h2><span>${report.posts.length.toLocaleString("vi-VN")} bài · ${report.totals.comments.toLocaleString("vi-VN")} bình luận</span></div>
     <section class="feed">${postCards}</section>
     <footer class="report-footer">Social Listening · VinSmart Future · Bản in chỉ đọc</footer>
   </main>

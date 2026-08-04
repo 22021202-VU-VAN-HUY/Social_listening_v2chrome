@@ -16,7 +16,7 @@ const environmentSchema = z
       .uuid()
       .default("00000000-0000-4000-8000-000000000001"),
     DEVICE_ONLINE_SECONDS: z.coerce.number().int().min(15).max(600).default(60),
-    LEASE_TTL_SECONDS: z.coerce.number().int().min(15).max(300).default(45),
+    LEASE_TTL_SECONDS: z.coerce.number().int().min(15).max(300).default(120),
     ADAPTER_VERSION: z.string().min(1).max(100).default("facebook-dom-v1"),
     CORS_ORIGINS: z
       .string()

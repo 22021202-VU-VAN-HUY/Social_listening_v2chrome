@@ -2,11 +2,20 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   completeJobSchema,
+  createCrawlJobSchema,
   extensionHeartbeatSchema,
   jobSnapshotSchema,
   platformSettingsSchema,
   postViewSchema,
 } from "@listening-social/contracts";
+
+test("crawl jobs allow the official Threads connector but not an unimplemented platform", () => {
+  assert.equal(
+    createCrawlJobSchema.safeParse({ platform: "threads", lookbackPreset: "7_days" }).success,
+    true,
+  );
+  assert.equal(createCrawlJobSchema.safeParse({ platform: "tiktok" }).success, false);
+});
 
 test("settings contracts are strict and enforce server hard limits", () => {
   const valid = {

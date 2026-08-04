@@ -105,6 +105,38 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
     return false;
   }
   const request = message as Record<string, unknown>;
+  if (request["type"] === "CRAWL_PROGRESS") {
+    const tabId = sender.tab?.id;
+    const runId = request["runId"];
+    const operation = request["operation"];
+    const round = request["round"];
+    const itemsSeen = request["itemsSeen"];
+    if (
+      tabId === undefined ||
+      typeof runId !== "string" ||
+      typeof operation !== "string" ||
+      !Number.isSafeInteger(round) ||
+      Number(round) < 0 ||
+      !Number.isSafeInteger(itemsSeen) ||
+      Number(itemsSeen) < 0
+    ) {
+      sendResponse({ ok: false, error: "invalid_progress" });
+      return false;
+    }
+    void runner
+      .recordContentProgress(
+        {
+          runId,
+          operation,
+          round: Number(round),
+          itemsSeen: Number(itemsSeen)
+        },
+        tabId
+      )
+      .then((accepted) => sendResponse({ ok: accepted }))
+      .catch(() => sendResponse({ ok: false, error: "progress_failed" }));
+    return true;
+  }
   switch (request["type"]) {
     case "POPUP_GET_STATUS":
       void runner

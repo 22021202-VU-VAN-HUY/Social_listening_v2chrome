@@ -1,6 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import {
   DataNotice,
   EmptyState,
@@ -33,6 +40,7 @@ type CommentItem = {
   source: string;
   authorName: string | null;
   anonymous: boolean;
+  anonymousVariant: number | null;
   content: string;
   sentiment: Sentiment | null;
   confidence: number;
@@ -49,6 +57,7 @@ type CommentItem = {
   postTimeParseStatus: "parsed" | "unknown";
   postAuthorName: string | null;
   postAnonymous: boolean;
+  postAnonymousVariant: number | null;
   postSentiment: Sentiment | null;
   postConfidence: number;
   postUrl: string | null;
@@ -61,6 +70,7 @@ type PostItem = {
   source: string;
   authorName: string | null;
   anonymous: boolean;
+  anonymousVariant: number | null;
   content: string;
   sentiment: Sentiment | null;
   confidence: number;
@@ -123,6 +133,61 @@ function authorLabel(name: string | null, anonymous: boolean): string {
 function authorInitial(name: string | null, anonymous: boolean): string {
   if (anonymous) return "A";
   return name?.trim().charAt(0).toLocaleUpperCase("vi-VN") || "?";
+}
+
+function stableAvatarVariant(value: number | null, seed: string): number {
+  if (value !== null && Number.isInteger(value) && value >= 0 && value <= 7) {
+    return value;
+  }
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < seed.length; index += 1) {
+    hash ^= seed.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0) % 8;
+}
+
+function AnonymousAvatarMark(): ReactNode {
+  return (
+    <span className="anonymous-avatar-mark" aria-hidden="true">
+      <span />
+    </span>
+  );
+}
+
+function renderCommentContent(
+  content: string,
+  parentAuthorName: string | null,
+  isReply: boolean,
+): ReactNode {
+  if (!isReply) return content;
+  const candidates = parentAuthorName?.trim() ? [parentAuthorName.trim()] : [];
+  const anonymousPrefix =
+    /^(người tham gia ẩn danh(?:\s+\d{1,4})?|thành viên ẩn danh(?:\s+\d{1,4})?|anonymous participant(?:\s+\d{1,4})?|anonymous member(?:\s+\d{1,4})?)(?=\s|[:,.!?]|$)/iu.exec(
+      content,
+    )?.[1];
+  if (anonymousPrefix) candidates.push(anonymousPrefix);
+
+  for (const candidate of candidates.sort(
+    (left, right) => right.length - left.length,
+  )) {
+    const withAt = content.startsWith("@") ? `@${candidate}` : candidate;
+    if (
+      content.slice(0, withAt.length).toLocaleLowerCase("vi-VN") !==
+      withAt.toLocaleLowerCase("vi-VN")
+    ) {
+      continue;
+    }
+    const boundary = content.charAt(withAt.length);
+    if (boundary && !/[\s:,.!?]/u.test(boundary)) continue;
+    return (
+      <>
+        <span className="comment-mention">{content.slice(0, withAt.length)}</span>
+        {content.slice(withAt.length)}
+      </>
+    );
+  }
+  return content;
 }
 
 function orderCommentThread(
@@ -204,6 +269,69 @@ function groupByPost(items: CommentItem[]): GroupedPost[] {
   }));
 }
 
+function filterCommentThreads(
+  items: CommentItem[],
+  platform: string,
+  sentiment: string,
+  query: string,
+): CommentItem[] {
+  const normalizedQuery = query.trim().toLocaleLowerCase("vi-VN");
+  const byId = new Map(items.map((item) => [item.id, item]));
+  const rootIds = new Map<string, string>();
+
+  const findRootId = (item: CommentItem): string => {
+    const cached = rootIds.get(item.id);
+    if (cached) return cached;
+    const visited = new Set<string>([item.id]);
+    let current = item;
+    while (current.parentCommentId) {
+      const parent = byId.get(current.parentCommentId);
+      if (!parent || visited.has(parent.id)) break;
+      visited.add(parent.id);
+      current = parent;
+    }
+    for (const id of visited) rootIds.set(id, current.id);
+    return current.id;
+  };
+
+  const membersByRoot = new Map<string, CommentItem[]>();
+  for (const item of items) {
+    const rootId = findRootId(item);
+    const members = membersByRoot.get(rootId) ?? [];
+    members.push(item);
+    membersByRoot.set(rootId, members);
+  }
+
+  const selectedRoots = new Set<string>();
+  for (const [rootId, members] of membersByRoot) {
+    const root = byId.get(rootId) ?? members[0]!;
+    if (platform !== "all" && root.platform !== platform) continue;
+    if (
+      sentiment !== "all" &&
+      !members.some((item) =>
+        sentiment === "pending"
+          ? item.sentiment === null
+          : item.sentiment === sentiment,
+      )
+    ) {
+      continue;
+    }
+    if (
+      normalizedQuery &&
+      !members.some((item) =>
+        `${item.content} ${item.source} ${item.postContext} ${item.keywords.join(" ")}`
+          .toLocaleLowerCase("vi-VN")
+          .includes(normalizedQuery),
+      )
+    ) {
+      continue;
+    }
+    selectedRoots.add(rootId);
+  }
+
+  return items.filter((item) => selectedRoots.has(findRootId(item)));
+}
+
 function sentimentOf(value: unknown): Sentiment | null {
   if (value === null || value === undefined || value === "") return null;
   const normalized = String(value).toLowerCase();
@@ -232,6 +360,7 @@ function nestedName(record: Record<string, unknown>, key: string): string {
 function normalizeAuthor(record: Record<string, unknown>): {
   name: string | null;
   anonymous: boolean;
+  variant: number | null;
 } {
   const nested = asRecord(record.author);
   const name =
@@ -255,7 +384,20 @@ function normalizeAuthor(record: Record<string, unknown>): {
         nested.is_anonymous,
     ) ||
     kind === "anonymous";
-  return { name, anonymous };
+  const variantValue =
+    record.anonymousAvatarVariant ??
+    record.anonymous_avatar_variant ??
+    nested.anonymousAvatarVariant ??
+    nested.anonymous_avatar_variant;
+  const parsedVariant = Number(variantValue);
+  const variant =
+    anonymous &&
+    Number.isInteger(parsedVariant) &&
+    parsedVariant >= 0 &&
+    parsedVariant <= 7
+      ? parsedVariant
+      : null;
+  return { name, anonymous, variant };
 }
 
 function keywordValues(value: unknown): string[] {
@@ -338,6 +480,9 @@ function normalizeComment(value: unknown): CommentItem | null {
   const postAnonymous =
     asBoolean(record.postIsAnonymous ?? record.post_is_anonymous) ||
     (!postAuthorName && postAuthor.anonymous);
+  const postAnonymousVariant = postAuthor.anonymous
+    ? postAuthor.variant
+    : null;
 
   return {
     id: String(record.id ?? record.externalId ?? crypto.randomUUID()),
@@ -355,6 +500,7 @@ function normalizeComment(value: unknown): CommentItem | null {
       "Nguồn chưa xác định",
     authorName: commentAuthor.name,
     anonymous: commentAuthor.anonymous,
+    anonymousVariant: commentAuthor.variant,
     content,
     sentiment: sentimentOf(
       sentimentRecord.label ??
@@ -427,6 +573,7 @@ function normalizeComment(value: unknown): CommentItem | null {
         : "unknown",
     postAuthorName,
     postAnonymous,
+    postAnonymousVariant,
     postSentiment: sentimentOf(
       postSentimentRecord.label ??
         post.sentimentLabel ??
@@ -485,6 +632,7 @@ function normalizePost(value: unknown): PostItem | null {
       "Nguồn chưa xác định",
     authorName: author.name,
     anonymous: author.anonymous,
+    anonymousVariant: author.variant,
     content,
     sentiment: sentimentOf(
       sentimentRecord.label ??
@@ -552,13 +700,12 @@ function buildTimeline(items: CommentItem[]): TimelinePoint[] {
 }
 
 function buildSnapshot(items: CommentItem[]): DashboardSnapshot {
-  const comments = items.filter((item) => !item.parentCommentId).length;
-  const replies = items.length - comments;
+  const comments = items.length;
   return {
-    total: items.length,
+    total: comments,
     posts: new Set(items.map((item) => item.postId).filter(Boolean)).size,
     comments,
-    replies,
+    replies: items.filter((item) => item.parentCommentId).length,
     unknownTime: items.filter(
       (item) => item.commentTimeParseStatus === "unknown",
     ).length,
@@ -587,22 +734,16 @@ function normalizeSummary(
   | "negative"
 > {
   const record = asRecord(value);
-  const total =
-    record.total === undefined ? fallback.total : asNumber(record.total);
   const replies =
     record.replies === undefined
       ? fallback.replies
       : asNumber(record.replies);
-  const rawComments =
+  const comments =
     record.comments === undefined
       ? fallback.comments
       : asNumber(record.comments);
-  const comments =
-    record.replies === undefined && rawComments === total
-      ? Math.max(0, total - replies)
-      : rawComments;
   return {
-    total,
+    total: comments,
     posts:
       record.posts === undefined ? fallback.posts : asNumber(record.posts),
     comments,
@@ -776,7 +917,6 @@ function buildPdfReport(
   summary: Pick<
     DashboardSnapshot,
     | "comments"
-    | "replies"
     | "pending"
     | "positive"
     | "neutral"
@@ -855,7 +995,6 @@ function buildPdfReport(
     totals: {
       posts: reportPosts.length,
       comments: summary.comments,
-      replies: summary.replies,
       pending: summary.pending,
       positive: summary.positive,
       neutral: summary.neutral,
@@ -989,29 +1128,10 @@ export function DashboardClient() {
     return () => window.clearInterval(interval);
   }, [refresh]);
 
-  const filteredItems = useMemo(() => {
-    const normalizedQuery = query.trim().toLocaleLowerCase("vi-VN");
-    return (snapshot?.items ?? []).filter((item) => {
-      if (platform !== "all" && item.platform !== platform) return false;
-      if (
-        sentiment !== "all" &&
-        (sentiment === "pending"
-          ? item.sentiment !== null
-          : item.sentiment !== sentiment)
-      ) {
-        return false;
-      }
-      if (
-        normalizedQuery &&
-        !`${item.content} ${item.source} ${item.postContext} ${item.keywords.join(" ")}`
-          .toLocaleLowerCase("vi-VN")
-          .includes(normalizedQuery)
-      ) {
-        return false;
-      }
-      return true;
-    });
-  }, [platform, query, sentiment, snapshot?.items]);
+  const filteredItems = useMemo(
+    () => filterCommentThreads(snapshot?.items ?? [], platform, sentiment, query),
+    [platform, query, sentiment, snapshot?.items],
+  );
 
   const groupedPosts = useMemo(
     () => groupByPost(filteredItems),
@@ -1042,7 +1162,7 @@ export function DashboardClient() {
         message:
           queued >= 0
             ? queued > 0
-              ? `Đã gửi ${queued.toLocaleString("vi-VN")} bài viết/comment chưa phân tích sang AI. Kết quả sẽ tự cập nhật.`
+              ? `Đã gửi ${queued.toLocaleString("vi-VN")} bài viết/bình luận chưa phân tích sang AI. Kết quả sẽ tự cập nhật.`
               : "Không có nội dung mới cần gửi AI; các mục đã phân tích được bỏ qua để tiết kiệm token."
             : asString(result.message) ||
               "Đã gửi các nội dung chưa phân tích sang AI. Kết quả sẽ tự cập nhật.",
@@ -1119,7 +1239,7 @@ export function DashboardClient() {
       <div className="page-loading" role="status" aria-live="polite">
         <span className="loading-orbit" aria-hidden="true" />
         <strong>Đang dựng bức tranh thảo luận…</strong>
-        <p>Kết nối bình luận, phản hồi và AI sentiment.</p>
+        <p>Kết nối bình luận, luồng hội thoại và AI sentiment.</p>
       </div>
     );
   }
@@ -1146,12 +1266,12 @@ export function DashboardClient() {
     <div className="page-stack">
       <section className="page-intro">
         <div>
-          <span className="section-kicker">Tín hiệu từ comment & reply</span>
+          <span className="section-kicker">Tín hiệu từ bình luận</span>
           <h2>Người dùng đang nói gì về VinSmart Future?</h2>
           <p>
-            Bình luận và phản hồi là dữ liệu listening chính. Bài post được lưu
-            đầy đủ metadata/ngữ cảnh gồm nguồn, URL, nội dung, tác giả dạng
-            name-only, thời gian đăng/thu thập và keyword khớp.
+            Bình luận gốc và reply đều được tính chung là bình luận trong KPI,
+            tỷ lệ sắc thái và biểu đồ. Reply chỉ dùng quan hệ cha-con để hiển thị
+            đúng luồng hội thoại như Facebook, không tách thành một chỉ số riêng.
           </p>
         </div>
         <div className="intro-actions">
@@ -1193,11 +1313,10 @@ export function DashboardClient() {
 
       <section className="kpi-grid" aria-label="Chỉ số bình luận">
         <article className="metric-card metric-total">
-          <span className="metric-label">Comment đã lọc</span>
+          <span className="metric-label">Bình luận đã lọc</span>
           <strong>{snapshot.total.toLocaleString("vi-VN")}</strong>
           <p>
-            <span>{snapshot.comments.toLocaleString("vi-VN")} bình luận</span>
-            <span>{snapshot.replies.toLocaleString("vi-VN")} phản hồi</span>
+            <span>Đã gộp cả reply vào tổng bình luận</span>
             <span>{snapshot.posts.toLocaleString("vi-VN")} bài post</span>
             {snapshot.unknownTime > 0 && (
               <span>
@@ -1472,10 +1591,14 @@ export function DashboardClient() {
               <article className="facebook-post-card" key={key}>
                 <header className="facebook-post-header">
                   <span
-                    className={`facebook-avatar${post.postAnonymous ? " is-anonymous" : ""}`}
+                    className={`facebook-avatar${post.postAnonymous ? ` is-anonymous anonymous-variant-${stableAvatarVariant(post.postAnonymousVariant, post.postId)}` : ""}`}
                     aria-hidden="true"
                   >
-                    {authorInitial(post.postAuthorName, post.postAnonymous)}
+                    {post.postAnonymous ? (
+                      <AnonymousAvatarMark />
+                    ) : (
+                      authorInitial(post.postAuthorName, false)
+                    )}
                   </span>
                   <div className="facebook-post-identity">
                     <strong>
@@ -1552,30 +1675,41 @@ export function DashboardClient() {
                 </div>
 
                 <div className="facebook-comment-summary">
-                  <span>{comments.length} bình luận và phản hồi</span>
+                  <span>{comments.length} bình luận</span>
                   <span>Chỉ đọc · Không tương tác</span>
                 </div>
 
                 <div className="facebook-comments">
-                  {comments.map(({ item, depth }) => (
-                    <div
-                      className={`facebook-comment${depth ? ` is-reply reply-depth-${depth}` : ""}`}
-                      data-reply-depth={depth}
-                      style={
-                        depth
-                          ? {
-                              marginLeft: `${Math.min(depth, 8) * 30}px`,
-                              ["--reply-depth" as string]: depth,
-                            }
-                          : undefined
-                      }
-                      key={item.id}
-                    >
+                  {comments.map(({ item, depth }) => {
+                    const parentAuthorName = item.parentCommentId
+                      ? (comments.find(
+                          ({ item: candidate }) =>
+                            candidate.id === item.parentCommentId,
+                        )?.item.authorName ?? null)
+                      : null;
+                    return (
+                      <div
+                        className={`facebook-comment${depth ? ` is-reply reply-depth-${depth}` : ""}`}
+                        data-reply-depth={depth}
+                        style={
+                          depth
+                            ? {
+                                marginLeft: `${Math.min(depth, 8) * 30}px`,
+                                ["--reply-depth" as string]: depth,
+                              }
+                            : undefined
+                        }
+                        key={item.id}
+                      >
                       <span
-                        className={`facebook-avatar facebook-comment-avatar${item.anonymous ? " is-anonymous" : ""}`}
+                        className={`facebook-avatar facebook-comment-avatar${item.anonymous ? ` is-anonymous anonymous-variant-${stableAvatarVariant(item.anonymousVariant, `${item.postId}|${item.id}`)}` : ""}`}
                         aria-hidden="true"
                       >
-                        {authorInitial(item.authorName, item.anonymous)}
+                        {item.anonymous ? (
+                          <AnonymousAvatarMark />
+                        ) : (
+                          authorInitial(item.authorName, false)
+                        )}
                       </span>
                       <div className="facebook-comment-body">
                         <div className="facebook-comment-line">
@@ -1583,7 +1717,13 @@ export function DashboardClient() {
                             <strong>
                               {authorLabel(item.authorName, item.anonymous)}
                             </strong>
-                            <p>{item.content}</p>
+                            <p>
+                              {renderCommentContent(
+                                item.content,
+                                parentAuthorName,
+                                depth > 0,
+                              )}
+                            </p>
                           </div>
                           <div className="facebook-comment-sentiment">
                             {item.sentiment ? (
@@ -1626,8 +1766,9 @@ export function DashboardClient() {
                           )}
                         </div>
                       </div>
-                    </div>
-                  ))}
+                        </div>
+                    );
+                  })}
                 </div>
               </article>
             ))}

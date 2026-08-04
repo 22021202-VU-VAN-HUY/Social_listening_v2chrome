@@ -20,8 +20,8 @@ Chrome Extension ────────────┘                Sentimen
 
 - `app/`: dashboard, jobs và settings.
 - `services/api/`: API, migration, seed, job lease/fencing và ingest.
-- `services/worker/`: phân tích lập trường của post/comment/reply đối với VSF,
-  có ngữ cảnh bài post và chuỗi reply cha.
+- `services/worker/`: phân tích lập trường của post và bình luận đối với VSF;
+  reply được tính như bình luận và có thêm ngữ cảnh chuỗi cha.
 - `apps/extension/`: Chrome Manifest V3, Facebook DOM adapter và tab runner.
 - `packages/contracts/`: Zod contract dùng chung.
 - `compose.yaml`: PostgreSQL, migrate, API, worker và web.
@@ -72,15 +72,14 @@ SENTIMENT_BASE_URL=http://ollama:11434
 
 Không commit `.env` hoặc secret.
 
-Với Docker, nút **Phân tích tất cả** trên Listening feed sẽ đưa toàn bộ
-post/comment/reply chưa có kết quả vào hàng đợi. Worker chỉ chấm thái độ của
-entity hiện tại đối với VSF; ngữ cảnh bài post và chuỗi reply cha chỉ dùng để
-giải nghĩa câu trả lời ngắn, phủ định hoặc mỉa mai. Khóa OpenAI/Gemini/MiMo chỉ tồn
+Với Docker, nút **Phân tích tất cả** trên Listening feed sẽ đưa toàn bộ post và
+bình luận chưa có kết quả vào hàng đợi. Reply được phân tích và tính chung như
+bình luận, nhưng vẫn hiển thị bên dưới bình luận cha như Facebook. Khóa OpenAI/Gemini/MiMo chỉ tồn
 tại worker và không được gửi xuống trình duyệt.
 
 Nút **Xuất / In PDF** trên dashboard tải toàn bộ dữ liệu theo từng trang API,
-sau đó dựng bản in HTML/CSS sát giao diện feed: KPI, cơ cấu/tỷ lệ sắc thái
-comment, toàn bộ card bài post và cây comment/reply thụt bậc. Trong hộp thoại
+sau đó dựng bản in HTML/CSS sát giao diện feed: KPI, cơ cấu/tỷ lệ sắc thái của
+toàn bộ bình luận, toàn bộ card bài post và cây comment/reply thụt bậc. Trong hộp thoại
 in của trình duyệt, chọn **Save as PDF** hoặc **Lưu dưới dạng PDF**.
 
 ## Chạy từng phần khi phát triển
@@ -134,6 +133,16 @@ hình. Chỉ khi DOM có marker kết thúc chính xác mới báo coverage `com
 không chứng minh được điểm cuối hoặc chạm giới hạn, job báo `unknown/partial`
 thay vì khẳng định sai là đã lấy hết.
 
+Trước khi đọc kết quả tìm kiếm trong group, extension chọn bộ lọc Facebook
+`Bài viết mới đây/Recent posts`. Nếu không tìm thấy hoặc không xác nhận được
+trạng thái đã chọn, coverage của bước tìm bài là `partial` với lý do
+`recent_posts_filter_unconfirmed`.
+
+Trong một lượt chạy, mỗi Facebook post ID chỉ được mở lấy comment một lần dù
+bài xuất hiện ở nhiều kết quả keyword. API đối chiếu post/comment ID với URL
+Facebook và PostgreSQL upsert theo `(workspace, platform, external_id)`, nên
+chạy lại không tạo thêm một bản ghi bài viết trùng.
+
 DOM Facebook thay đổi theo tài khoản, ngôn ngữ và rollout. Fixture tests bảo vệ
 các selector/flow hiện có; trước production vẫn phải UAT thủ công trên các group
 được phép và cập nhật adapter khi markup thay đổi.
@@ -153,6 +162,11 @@ Hệ thống chỉ chấp nhận ba trường:
 Với bài/comment ẩn danh, `authorName` bắt buộc là `null` và
 `authorKind = "anonymous"`. Contract, extension, API và constraint PostgreSQL
 đều từ chối platform author ID, profile URL, username, handle hoặc avatar URL.
+Extension chỉ tạo một nhóm màu `anonymousAvatarVariant` từ nhãn ẩn danh đang
+hiển thị và ID bài viết. Giá trị 0–7 này không phải ID tác giả, không cho phép
+liên kết người dùng giữa các bài và chỉ dùng để dựng avatar màu trên dashboard.
+Comment và reply ẩn danh đều luôn có variant; nếu Facebook không hiển thị số
+nhãn ẩn danh thì external comment ID chỉ được dùng làm seed một chiều trong bài.
 UI hiển thị tên dưới dạng text, không tạo link profile. Xem
 `docs/AUTHOR_PRIVACY.md`.
 
@@ -168,8 +182,8 @@ link hồ sơ người dùng; query tracking như `fbclid` và `utm_*` được 
 5. Crawl job tìm post khớp keyword, lưu metadata bài post rồi lấy comment/reply.
 6. API kiểm lại source/task/window và keyword từ snapshot, upsert chống trùng;
    crawl không tự tiêu tốn lượt AI.
-7. Khi người dùng bấm `Phân tích tất cả`, API queue post/comment/reply chưa có
-   kết quả; worker phân tích lập trường đối với VSF.
+7. Khi người dùng bấm `Phân tích tất cả`, API queue post và mọi bình luận chưa
+   có kết quả; worker phân tích lập trường đối với VSF, gồm cả reply.
 8. Dashboard đọc PostgreSQL, refresh mỗi 5 giây và cho phép xuất PDF.
 
 Bốn keyword seed mặc định: `VSF`, `VinSmart Future`, `Vinfuture`, `Vin Future`.
@@ -209,8 +223,9 @@ Các test bao gồm:
 - Không dùng để né rate limit, checkpoint, CAPTCHA hoặc cơ chế bảo vệ nền tảng.
 - Kết quả là nội dung quan sát được qua UI tại thời điểm crawl, không phải cam
   kết bao phủ 100% dữ liệu Facebook.
-- Post có sentiment riêng để hiển thị trên feed; KPI cơ cấu sắc thái chính vẫn
-  chỉ tính comment/reply.
+- Post có sentiment riêng để hiển thị trên feed; KPI, tỷ lệ và timeline chính
+  gộp bình luận gốc và reply vào cùng một loại dữ liệu là bình luận. Mọi bình
+  luận có nhãn đều thuộc một trong ba nhóm tích cực, trung lập hoặc tiêu cực.
 - Frontend không tạo dữ liệu demo khi API offline; màn hình để trống và báo lỗi
   kết nối. Dữ liệu chỉ xuất hiện từ API/PostgreSQL/extension thật.
 - Trước production cần chốt retention, quyền truy cập, điều khoản nền tảng,

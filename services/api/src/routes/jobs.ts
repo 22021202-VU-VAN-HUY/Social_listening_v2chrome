@@ -198,6 +198,211 @@ async function ensureDeviceHasNoActiveFacebookJob(
   }
 }
 
+async function createThreadsCrawlJob(
+  transaction: Transaction,
+  context: AppContext,
+  input: {
+    sourceIds?: string[] | undefined;
+    keywordIds?: string[] | undefined;
+    lookbackPreset?: "today" | "3_days" | "7_days" | "30_days" | undefined;
+  },
+): Promise<ReturnType<typeof serializeJob>> {
+  if (input.sourceIds) {
+    throw new ApiError(
+      400,
+      "THREADS_SOURCE_FILTER_UNSUPPORTED",
+      "Threads keyword search uses its managed public-search source",
+    );
+  }
+
+  const activeJob = await transaction.query(
+    `
+      SELECT 1
+      FROM crawl_jobs
+      WHERE workspace_id = $1
+        AND platform = 'threads'
+        AND status IN ('queued', 'running', 'interrupted')
+      LIMIT 1
+      FOR UPDATE
+    `,
+    [context.config.workspaceId],
+  );
+  if (activeJob.rowCount) {
+    conflict(
+      "THREADS_JOB_ALREADY_ACTIVE",
+      "This workspace already has an unfinished Threads job",
+    );
+  }
+
+  const settingsResult = await transaction.query<{
+    lookback_preset: "today" | "3_days" | "7_days" | "30_days";
+    max_posts_per_source: number;
+    max_runtime_minutes: number;
+    enabled: boolean;
+    timezone: string;
+  }>(
+    `
+      SELECT settings.lookback_preset,
+             settings.max_posts_per_source,
+             settings.max_runtime_minutes,
+             settings.enabled,
+             workspace.timezone
+      FROM platform_settings AS settings
+      JOIN workspaces AS workspace ON workspace.id = settings.workspace_id
+      WHERE settings.workspace_id = $1 AND settings.platform = 'threads'
+      FOR UPDATE OF settings
+    `,
+    [context.config.workspaceId],
+  );
+  const settings = settingsResult.rows[0];
+  if (!settings?.enabled) {
+    throw new ApiError(
+      409,
+      "THREADS_CONNECTOR_DISABLED",
+      "Enable the Threads connector in platform settings first",
+    );
+  }
+
+  const keywordResult = await transaction.query<{
+    id: string;
+    value: string;
+    normalized_value: string;
+    match_mode: "whole_word" | "contains_phrase";
+  }>(
+    `
+      SELECT id, value, normalized_value, match_mode
+      FROM keywords
+      WHERE workspace_id = $1
+        AND platform = 'threads'
+        AND active = true
+        AND ($2::uuid[] IS NULL OR id = ANY($2::uuid[]))
+      ORDER BY created_at
+    `,
+    [context.config.workspaceId, input.keywordIds ?? null],
+  );
+  if (keywordResult.rows.length === 0) {
+    throw new ApiError(
+      400,
+      "NO_ACTIVE_KEYWORDS",
+      "Enable at least one Threads keyword",
+    );
+  }
+
+  const sourceResult = await transaction.query<{
+    id: string;
+    external_id: string;
+    name: string;
+    canonical_url: string;
+  }>(
+    `
+      INSERT INTO sources (
+        workspace_id, platform, external_id, name, canonical_url, active
+      )
+      VALUES (
+        $1, 'threads', 'threads:public-keyword-search',
+        'Threads public keyword search',
+        'https://www.threads.com/search', true
+      )
+      ON CONFLICT (workspace_id, platform, external_id)
+      DO UPDATE SET active = true, updated_at = now()
+      RETURNING id, external_id, name, canonical_url
+    `,
+    [context.config.workspaceId],
+  );
+  const source = sourceResult.rows[0]!;
+  await transaction.query(
+    `
+      INSERT INTO source_selections (workspace_id, source_id, selected, selected_at)
+      VALUES ($1, $2, true, now())
+      ON CONFLICT (workspace_id, source_id)
+      DO UPDATE SET selected = true, selected_at = now(), updated_at = now()
+    `,
+    [context.config.workspaceId, source.id],
+  );
+
+  const createdAt = new Date();
+  const lookbackPreset = input.lookbackPreset ?? settings.lookback_preset;
+  const window = calculateWindow(lookbackPreset, createdAt, settings.timezone);
+  const snapshot = {
+    connector: "threads-keyword-search-v1",
+    sourceIds: [source.id],
+    keywordIds: keywordResult.rows.map((keyword) => keyword.id),
+    keywords: keywordResult.rows.map((keyword) => ({
+      id: keyword.id,
+      value: keyword.value,
+      normalizedValue: keyword.normalized_value,
+      matchMode: keyword.match_mode,
+    })),
+    searchType: "RECENT",
+    searchMode: "KEYWORD",
+    requestedFields: [
+      "id",
+      "text",
+      "timestamp",
+      "permalink",
+      "is_reply",
+    ],
+    windowStartUtc: window.start.toISOString(),
+    windowEndUtc: window.end.toISOString(),
+    timezone: settings.timezone,
+    lookbackPreset,
+    crawlComments: false,
+    limits: {
+      maxPostsPerSource: settings.max_posts_per_source,
+      maxRuntimeMinutes: settings.max_runtime_minutes,
+    },
+  };
+  const progress = {
+    stage: "queued",
+    currentSource: source.name,
+    sourcesTotal: 1,
+    sourcesDone: 0,
+    tasksTotal: keywordResult.rows.length,
+    tasksDone: 0,
+    postsScanned: 0,
+    postsMatched: 0,
+    postsSaved: 0,
+    commentsSaved: 0,
+    pagesFetched: 0,
+    apiCalls: 0,
+    sentimentTotal: 0,
+    sentimentDone: 0,
+    lastHeartbeatAt: null,
+  };
+  const result = await transaction.query<JobRow>(
+    `
+      INSERT INTO crawl_jobs (
+        workspace_id, type, platform, status, settings_snapshot, progress,
+        created_at
+      )
+      VALUES ($1, 'crawl_content', 'threads', 'queued', $2::jsonb, $3::jsonb, $4)
+      RETURNING *
+    `,
+    [
+      context.config.workspaceId,
+      JSON.stringify(snapshot),
+      JSON.stringify(progress),
+      createdAt,
+    ],
+  );
+  const row = result.rows[0]!;
+  for (const keyword of keywordResult.rows) {
+    await transaction.query(
+      `
+        INSERT INTO crawl_tasks (job_id, source_id, keyword_id)
+        VALUES ($1, $2, $3)
+      `,
+      [row.id, source.id, keyword.id],
+    );
+  }
+  await appendJobEvent(transaction, row.id, "info", "job.created", {
+    type: "crawl_content",
+    connector: "threads-keyword-search-v1",
+    tasksTotal: keywordResult.rows.length,
+  });
+  return serializeJob(row);
+}
+
 export function registerJobRoutes(app: FastifyInstance, context: AppContext): void {
   app.post("/api/v1/jobs/discover-sources", async (request, reply) => {
     const input = parseWith(createDiscoverSourcesJobSchema, request.body);
@@ -262,6 +467,9 @@ export function registerJobRoutes(app: FastifyInstance, context: AppContext): vo
   app.post("/api/v1/jobs/crawl", async (request, reply) => {
     const input = parseWith(createCrawlJobSchema, request.body);
     const job = await inTransaction(context.database, async (transaction) => {
+      if (input.platform === "threads") {
+        return createThreadsCrawlJob(transaction, context, input);
+      }
       const device = await findOnlineDevice(transaction, context, input.deviceId);
       await ensureDeviceHasNoActiveFacebookJob(transaction, device.id);
 
@@ -547,12 +755,19 @@ export function registerJobRoutes(app: FastifyInstance, context: AppContext): vo
     return inTransaction(context.database, async (transaction) => {
       const result = await transaction.query<{
         status: JobRow["status"];
+        has_active_lease: boolean;
       }>(
         `
-          SELECT status
-          FROM crawl_jobs
-          WHERE id = $1 AND workspace_id = $2
-          FOR UPDATE
+          SELECT job.status,
+                 EXISTS (
+                   SELECT 1
+                   FROM crawler_slots AS slot
+                   WHERE slot.job_id = job.id
+                     AND slot.lease_expires_at > now()
+                 ) AS has_active_lease
+          FROM crawl_jobs AS job
+          WHERE job.id = $1 AND job.workspace_id = $2
+          FOR UPDATE OF job
         `,
         [id, context.config.workspaceId],
       );
@@ -568,7 +783,7 @@ export function registerJobRoutes(app: FastifyInstance, context: AppContext): vo
         "waiting_extension",
         "interrupted",
         "needs_login",
-      ].includes(job.status);
+      ].includes(job.status) || !job.has_active_lease;
       const nextStatus = cancelImmediately ? "cancelled" : job.status;
       await transaction.query(
         `
@@ -585,6 +800,16 @@ export function registerJobRoutes(app: FastifyInstance, context: AppContext): vo
       if (cancelImmediately) {
         await transaction.query(
           "DELETE FROM crawler_slots WHERE job_id = $1",
+          [id],
+        );
+        await transaction.query(
+          `
+            UPDATE crawl_tasks
+            SET state = CASE WHEN state = 'completed' THEN state ELSE 'skipped' END,
+                completed_at = COALESCE(completed_at, now()),
+                updated_at = now()
+            WHERE job_id = $1
+          `,
           [id],
         );
       }

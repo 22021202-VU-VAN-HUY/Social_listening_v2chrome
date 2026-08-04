@@ -31,6 +31,7 @@ listening được đưa vào sentiment `positive | negative | neutral`.
 Extension chỉ được điều hướng, scroll và click đúng allowlist các nút chỉ-đọc:
 
 - xem/hiển thị thêm nội dung;
+- mở bộ lọc bài viết và chọn `Bài viết mới đây/Recent posts`;
 - tất cả bình luận;
 - mở bộ lọc `Phù hợp nhất/Most relevant` để chọn `Tất cả bình luận/All comments`;
 - xem thêm bình luận;

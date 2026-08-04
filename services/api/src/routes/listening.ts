@@ -33,6 +33,7 @@ interface ContentRow {
   post_author_name?: string | null;
   post_is_anonymous?: boolean;
   post_author_kind?: "real" | "anonymous" | "unknown";
+  post_anonymous_avatar_variant?: number | null;
   post_sentiment_label?: "positive" | "negative" | "neutral" | null;
   post_sentiment_confidence?: string | number | null;
   post_sentiment_relevant?: boolean | null;
@@ -52,6 +53,7 @@ interface ContentRow {
   author_name: string | null;
   is_anonymous: boolean;
   author_kind: "real" | "anonymous" | "unknown";
+  anonymous_avatar_variant?: number | null;
   sentiment_label: "positive" | "negative" | "neutral" | null;
   sentiment_confidence: string | number | null;
   sentiment_relevant: boolean | null;
@@ -308,6 +310,7 @@ export function registerListeningRoutes(
                post.author_name,
                post.is_anonymous,
                post.author_kind,
+               post.anonymous_avatar_variant,
                COALESCE(
                  keyword_context.matched_keywords,
                  '[]'::jsonb
@@ -416,6 +419,7 @@ export function registerListeningRoutes(
                post.author_name AS post_author_name,
                post.is_anonymous AS post_is_anonymous,
                post.author_kind AS post_author_kind,
+               post.anonymous_avatar_variant AS post_anonymous_avatar_variant,
                COALESCE(post_override.label, post_analysis.label)
                  AS post_sentiment_label,
                CASE
@@ -444,6 +448,7 @@ export function registerListeningRoutes(
                comment.author_name,
                comment.is_anonymous,
                comment.author_kind,
+               comment.anonymous_avatar_variant,
                COALESCE(override.label, analysis.label) AS sentiment_label,
                CASE
                  WHEN override.label IS NOT NULL THEN 1
@@ -511,6 +516,14 @@ export function registerListeningRoutes(
                 : null,
             isAnonymous: row.post_is_anonymous ?? false,
             authorKind: row.post_author_kind ?? "unknown",
+            ...(row.post_author_kind === "anonymous" &&
+            row.post_anonymous_avatar_variant !== null &&
+            row.post_anonymous_avatar_variant !== undefined
+              ? {
+                  anonymousAvatarVariant:
+                    row.post_anonymous_avatar_variant,
+                }
+              : {}),
           },
           matchedKeywords: row.matched_keywords ?? [],
           sentiment: row.post_sentiment_label

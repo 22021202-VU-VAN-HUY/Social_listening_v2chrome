@@ -38,7 +38,7 @@ export const createDiscoverSourcesJobSchema = z
 
 export const createCrawlJobSchema = z
   .object({
-    platform: facebookPlatformSchema.default("facebook"),
+    platform: z.enum(["facebook", "threads"]).default("facebook"),
     deviceId: idSchema.optional(),
     sourceIds: z.array(idSchema).min(1).max(50).optional(),
     keywordIds: z.array(idSchema).min(1).max(100).optional(),

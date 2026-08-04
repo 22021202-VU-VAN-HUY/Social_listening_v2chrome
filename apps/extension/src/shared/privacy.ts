@@ -41,13 +41,20 @@ export function sanitizeAuthorName(value: unknown): string | null {
 
 export function makeSafeAuthor(
   rawDisplayName: unknown,
-  isAnonymous: boolean
+  isAnonymous: boolean,
+  anonymousAvatarVariant?: number
 ): SafeAuthorDto {
   if (isAnonymous) {
     return {
       authorName: null,
       isAnonymous: true,
-      authorKind: "anonymous"
+      authorKind: "anonymous",
+      ...(Number.isInteger(anonymousAvatarVariant) &&
+      anonymousAvatarVariant !== undefined &&
+      anonymousAvatarVariant >= 0 &&
+      anonymousAvatarVariant <= 7
+        ? { anonymousAvatarVariant }
+        : {})
     };
   }
 

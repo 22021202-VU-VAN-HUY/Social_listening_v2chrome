@@ -13,7 +13,7 @@ import {
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { AppContext } from "../context.js";
-import { inTransaction } from "../db.js";
+import { inTransaction, type Transaction } from "../db.js";
 import { appendJobEvent } from "../events.js";
 import { ApiError, conflict, notFound } from "../errors.js";
 import { ingestContentBatch, ingestSourceBatch } from "../ingest.js";
@@ -37,6 +37,79 @@ function idempotencyKeyFrom(headers: Record<string, unknown>): string {
     idempotencyKeySchema,
     Array.isArray(value) ? value[0] : value,
   );
+}
+
+async function reconcileExpiredDeviceLeases(
+  transaction: Transaction,
+  deviceId: string,
+): Promise<void> {
+  const expired = await transaction.query<{
+    id: string;
+    status: "cancelled" | "interrupted";
+  }>(
+    `
+      WITH expired_slots AS (
+        DELETE FROM crawler_slots
+        WHERE extension_device_id = $1
+          AND lease_expires_at <= now()
+        RETURNING job_id
+      )
+      UPDATE crawl_jobs AS job
+      SET status = CASE
+            WHEN job.cancel_requested THEN 'cancelled'
+            ELSE 'interrupted'
+          END,
+          error_code = CASE
+            WHEN job.cancel_requested THEN job.error_code
+            ELSE 'LEASE_EXPIRED'
+          END,
+          error_message = CASE
+            WHEN job.cancel_requested THEN job.error_message
+            ELSE 'The extension stopped heartbeating before the crawl finished.'
+          END,
+          completed_at = CASE
+            WHEN job.cancel_requested THEN now()
+            ELSE NULL
+          END,
+          progress = jsonb_set(
+            job.progress,
+            '{stage}',
+            to_jsonb(
+              CASE
+                WHEN job.cancel_requested THEN 'cancelled'::text
+                ELSE 'interrupted'::text
+              END
+            )
+          ),
+          updated_at = now()
+      FROM expired_slots
+      WHERE job.id = expired_slots.job_id
+        AND job.status IN ('running', 'processing_ai')
+      RETURNING job.id, job.status
+    `,
+    [deviceId],
+  );
+
+  for (const job of expired.rows) {
+    await transaction.query(
+      `
+        UPDATE crawl_tasks
+        SET state = CASE WHEN $2 = 'cancelled' THEN 'skipped' ELSE 'pending' END,
+            completed_at = CASE WHEN $2 = 'cancelled' THEN now() ELSE NULL END,
+            updated_at = now()
+        WHERE job_id = $1
+          AND state IN ('pending', 'running')
+      `,
+      [job.id, job.status],
+    );
+    await appendJobEvent(
+      transaction,
+      job.id,
+      "warn",
+      job.status === "cancelled" ? "job.cancelled" : "lease.expired",
+      {},
+    );
+  }
 }
 
 export function registerExtensionRoutes(
@@ -204,6 +277,10 @@ export function registerExtensionRoutes(
       );
       let leaseExpiresAt: Date | undefined;
       let cancelRequested = false;
+
+      if (!heartbeat.jobId) {
+        await reconcileExpiredDeviceLeases(transaction, device.id);
+      }
 
       if (
         heartbeat.jobId &&
@@ -721,10 +798,42 @@ export function registerExtensionRoutes(
         await transaction.query(
           `
             UPDATE crawl_jobs
-            SET progress = $2::jsonb, updated_at = now()
+            SET progress = progress || $2::jsonb, updated_at = now()
             WHERE id = $1
           `,
           [jobId, JSON.stringify(event.progress)],
+        );
+      }
+      if (event.type === "task.completed") {
+        await transaction.query(
+          `
+            UPDATE crawl_jobs AS job
+            SET progress = jsonb_set(
+                  jsonb_set(
+                    job.progress,
+                    '{tasksDone}',
+                    to_jsonb((
+                      SELECT count(*)::integer
+                      FROM crawl_tasks
+                      WHERE job_id = job.id AND state = 'completed'
+                    ))
+                  ),
+                  '{sourcesDone}',
+                  to_jsonb((
+                    SELECT count(*)::integer
+                    FROM (
+                      SELECT source_id
+                      FROM crawl_tasks
+                      WHERE job_id = job.id AND source_id IS NOT NULL
+                      GROUP BY source_id
+                      HAVING bool_and(state = 'completed')
+                    ) AS completed_sources
+                  ))
+                ),
+                updated_at = now()
+            WHERE job.id = $1
+          `,
+          [jobId],
         );
       }
       const sequence = await appendJobEvent(
@@ -865,26 +974,47 @@ export function registerExtensionRoutes(
         leaseToken: failure.leaseToken,
         fencingToken: failure.fencingToken,
       });
-      await transaction.query(
+      const failureResult = await transaction.query<{
+        status: "failed" | "needs_login" | "interrupted" | "cancelled";
+      }>(
         `
           UPDATE crawl_jobs
-          SET status = $2,
+          SET status = CASE
+                WHEN cancel_requested AND $2 = 'interrupted' THEN 'cancelled'
+                ELSE $2
+              END,
               error_code = $3,
               error_message = $4,
-              progress = jsonb_set(progress, '{stage}', to_jsonb($2::text)),
-              completed_at = CASE WHEN $2 = 'failed' THEN now() ELSE NULL END,
+              progress = jsonb_set(
+                progress,
+                '{stage}',
+                to_jsonb(
+                  CASE
+                    WHEN cancel_requested AND $2 = 'interrupted'
+                      THEN 'cancelled'::text
+                    ELSE $2::text
+                  END
+                )
+              ),
+              completed_at = CASE
+                WHEN $2 = 'failed' OR (cancel_requested AND $2 = 'interrupted')
+                  THEN now()
+                ELSE NULL
+              END,
               updated_at = now()
           WHERE id = $1
+          RETURNING status
         `,
         [jobId, failure.status, failure.code, failure.message],
       );
+      const finalStatus = failureResult.rows[0]?.status ?? failure.status;
       await appendJobEvent(
         transaction,
         jobId,
         "error",
         "extension.failed",
         {
-          status: failure.status,
+          status: finalStatus,
           code: failure.code,
           message: failure.message,
           retryable: failure.retryable,
@@ -906,9 +1036,9 @@ export function registerExtensionRoutes(
               updated_at = now()
           WHERE id = $1
         `,
-        [device.id, failure.status],
+        [device.id, finalStatus],
       );
-      return { id: jobId, status: failure.status };
+      return { id: jobId, status: finalStatus };
     });
   });
 }

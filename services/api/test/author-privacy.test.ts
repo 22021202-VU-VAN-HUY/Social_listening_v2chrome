@@ -8,6 +8,8 @@ import {
 import {
   assertNoIdentityTrackingFields,
   authorForStorage,
+  facebookCommentExternalIdFromUrl,
+  facebookPostExternalIdFromUrl,
   sanitizeContentUrl,
   sanitizeFacebookContentUrl,
   sanitizeFacebookGroupUrl,
@@ -42,6 +44,7 @@ test("accepts a real display name and stores only the closed privacy shape", () 
     authorName: "Nguyễn Văn An",
     isAnonymous: false,
     authorKind: "real",
+    anonymousAvatarVariant: null,
   });
 });
 
@@ -57,12 +60,14 @@ test("accepts anonymous content without retaining an alias", () => {
       authorName: null,
       isAnonymous: true,
       authorKind: "anonymous",
+      anonymousAvatarVariant: 5,
     },
   });
   assert.deepEqual(authorForStorage(parsed.author), {
     authorName: null,
     isAnonymous: true,
     authorKind: "anonymous",
+    anonymousAvatarVariant: 5,
   });
 });
 
@@ -71,6 +76,7 @@ test("unknown authors always have a null name in contracts and storage", () => {
     authorName: null,
     isAnonymous: false,
     authorKind: "unknown",
+    anonymousAvatarVariant: null,
   } as const;
   assert.equal(
     ingestCommentSchema.safeParse({
@@ -192,6 +198,19 @@ test("Facebook ingest URLs accept only group and group-content entities", () => 
   ]) {
     assert.throws(() => sanitizeFacebookGroupUrl(invalid));
   }
+});
+
+test("Facebook content URLs provide canonical post and comment identities", () => {
+  const replyUrl =
+    "https://www.facebook.com/groups/vinfuture/posts/post-123?comment_id=comment-root&reply_comment_id=reply-456";
+  assert.equal(facebookPostExternalIdFromUrl(replyUrl), "post-123");
+  assert.equal(facebookCommentExternalIdFromUrl(replyUrl), "reply-456");
+  assert.equal(
+    facebookCommentExternalIdFromUrl(
+      "https://www.facebook.com/groups/vinfuture/posts/post-123?comment_id=comment-root",
+    ),
+    "comment-root",
+  );
 });
 
 test("diagnostic metadata rejects identity-tracking keys recursively", () => {

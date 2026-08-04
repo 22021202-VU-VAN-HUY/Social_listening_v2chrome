@@ -4,10 +4,42 @@ import { FacebookDomAdapter } from "../src/content/facebook-dom-adapter";
 import {
   assessCommentCoverage,
   assessGroupListCoverage,
-  assessPostSearchCoverage
+  assessPostSearchCoverage,
+  FacebookContentRunner,
+  type CrawlProgressSignal
 } from "../src/content/facebook-runner";
 
 describe("comment coverage assessment", () => {
+  it("emits a progress pulse when a background crawl command starts", async () => {
+    const dom = new JSDOM("<main></main>", {
+      url: "https://www.facebook.com/groups/joins/"
+    });
+    const progress: CrawlProgressSignal[] = [];
+    const runner = new FacebookContentRunner(
+      dom.window.document,
+      dom.window as unknown as Window,
+      (signal) => {
+        progress.push(signal);
+      }
+    );
+    await runner.handle({ type: "ASSIGN_RUN", runId: "run-progress-test" });
+    await runner.handle({
+      type: "DISCOVER_GROUPS",
+      runId: "run-progress-test",
+      limits: { maxGroups: 50, maxScrollRounds: 0, mutationWaitMs: 1 }
+    });
+
+    expect(progress).toEqual([
+      {
+        type: "CRAWL_PROGRESS",
+        runId: "run-progress-test",
+        operation: "discover_groups",
+        round: 0,
+        itemsSeen: 0
+      }
+    ]);
+  });
+
   it("keeps a hard comment limit partial even when an end marker is visible", () => {
     expect(assessCommentCoverage(true, true)).toEqual({
       coverageStatus: "partial",

@@ -135,6 +135,33 @@ export function sanitizeFacebookContentUrl(
   return url.toString();
 }
 
+export function facebookPostExternalIdFromUrl(rawUrl: string): string {
+  const canonicalUrl = sanitizeFacebookContentUrl(rawUrl);
+  if (!canonicalUrl) {
+    throw new Error("Facebook content URL is required");
+  }
+  const segments = facebookPathSegments(new URL(canonicalUrl));
+  const externalId = segments[3];
+  if (!externalId) {
+    throw new Error("Facebook post ID is missing from the content URL");
+  }
+  return externalId;
+}
+
+export function facebookCommentExternalIdFromUrl(
+  rawUrl: string,
+): string | null {
+  const canonicalUrl = sanitizeFacebookContentUrl(rawUrl);
+  if (!canonicalUrl) {
+    return null;
+  }
+  const url = new URL(canonicalUrl);
+  return (
+    url.searchParams.get("reply_comment_id") ??
+    url.searchParams.get("comment_id")
+  );
+}
+
 /**
  * Deliberately returns a closed shape. Even if an untyped caller passes extra
  * identifiers, only a display name and anonymous classification reach SQL.
@@ -143,11 +170,16 @@ export function authorForStorage(author: Author): {
   authorName: string | null;
   isAnonymous: boolean;
   authorKind: "real" | "anonymous" | "unknown";
+  anonymousAvatarVariant: number | null;
 } {
   return {
     authorName: author.authorKind === "real" ? author.authorName : null,
     isAnonymous: author.authorKind === "anonymous",
     authorKind: author.authorKind,
+    anonymousAvatarVariant:
+      author.authorKind === "anonymous"
+        ? (author.anonymousAvatarVariant ?? null)
+        : null,
   };
 }
 

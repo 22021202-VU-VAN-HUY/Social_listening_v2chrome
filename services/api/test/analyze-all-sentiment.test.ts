@@ -5,7 +5,7 @@ import type { Database } from "../src/db.js";
 import { loadConfig } from "../src/config.js";
 import { registerListeningRoutes } from "../src/routes/listening.js";
 
-test("analyze-all queues only posts and comments without an existing result", async () => {
+test("analyze-all queues posts, comments, and replies without a result", async () => {
   let querySql = "";
   let queryParameters: unknown[] = [];
   const database = {

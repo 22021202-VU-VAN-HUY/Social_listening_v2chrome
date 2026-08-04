@@ -69,6 +69,18 @@ try {
     );
   }
 
+  await database.query(
+    `
+      INSERT INTO keywords (
+        workspace_id, platform, value, normalized_value, match_mode, active
+      )
+      VALUES ($1, 'threads', 'VinSmart Future', 'vinsmart future',
+              'contains_phrase', true)
+      ON CONFLICT (workspace_id, platform, normalized_value) DO NOTHING
+    `,
+    [config.workspaceId],
+  );
+
   process.stdout.write("Seeded workspace, platform settings, and default keywords.\n");
 } finally {
   await database.end();

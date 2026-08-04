@@ -242,18 +242,22 @@ describe("FacebookDomAdapter", () => {
     expect(posts).toHaveLength(2);
     expect(comments).toHaveLength(2);
     for (const post of posts) {
-      expect(post.author).toEqual({
+      expect(post.author).toMatchObject({
         authorName: null,
         isAnonymous: true,
         authorKind: "anonymous"
       });
+      expect(post.author.anonymousAvatarVariant).toBeGreaterThanOrEqual(0);
+      expect(post.author.anonymousAvatarVariant).toBeLessThanOrEqual(7);
     }
     for (const comment of comments) {
-      expect(comment.author).toEqual({
+      expect(comment.author).toMatchObject({
         authorName: null,
         isAnonymous: true,
         authorKind: "anonymous"
       });
+      expect(comment.author.anonymousAvatarVariant).toBeGreaterThanOrEqual(0);
+      expect(comment.author.anonymousAvatarVariant).toBeLessThanOrEqual(7);
     }
     expect(JSON.stringify({ posts, comments })).not.toContain(
       "Anonymous participant"
@@ -901,6 +905,96 @@ describe("FacebookDomAdapter", () => {
         author: "Minh Anh"
       }
     ]);
+  });
+
+  it("recovers anonymous authors and direct parents from flattened Facebook replies", () => {
+    const dom = new JSDOM(
+      `
+        <article data-sl-post>
+          <span data-sl-author>Người đăng bài</span>
+          <div data-sl-post-body>VSF có chính sách lương thế nào?</div>
+          <a href="/groups/1/posts/post-anonymous-thread/">Bài viết</a>
+
+          <div aria-label="Bình luận dưới tên anh grab zui tính vào 2 ngày trước">
+            <div data-sl-comment>
+              <span data-sl-comment-body>Deal lương cũ +50%</span>
+              <a href="/groups/1/posts/post-anonymous-thread/?comment_id=comment-root">2 ngày</a>
+            </div>
+          </div>
+          <div aria-label="Bình luận dưới tên Người tham gia ẩn danh vào 2 ngày trước">
+            <div data-sl-comment>
+              <span data-sl-comment-body>anh grab zui tính trừ lương là sao ạ</span>
+              <a href="/groups/1/posts/post-anonymous-thread/?comment_id=comment-root&amp;reply_comment_id=reply-anonymous">2 ngày</a>
+            </div>
+          </div>
+          <div aria-label="Bình luận dưới tên Người tham gia ẩn danh 820 vào 2 ngày trước">
+            <div data-sl-comment>
+              <span data-sl-comment-body>Người tham gia ẩn danh chậm báo cáo là trừ thôi</span>
+              <a href="/groups/1/posts/post-anonymous-thread/?comment_id=comment-root&amp;reply_comment_id=reply-nested-anonymous">2 ngày</a>
+            </div>
+          </div>
+          <div aria-label="Bình luận dưới tên anh grab zui tính vào 2 ngày trước">
+            <div data-sl-comment>
+              <span data-sl-comment-body>Anonymous participant đi trễ 2p cũng bị trừ</span>
+              <a href="/groups/1/posts/post-anonymous-thread/?comment_id=comment-root&amp;reply_comment_id=reply-author-followup">2 ngày</a>
+            </div>
+          </div>
+          <div aria-label="Bình luận dưới tên ExcitingLynx6404 vào 2 ngày trước">
+            <div data-sl-comment>
+              <span data-sl-comment-body>anh grab zui tính sếp deal được +50% không?</span>
+              <a href="/groups/1/posts/post-anonymous-thread/?comment_id=comment-root&amp;reply_comment_id=reply-second-branch">2 ngày</a>
+            </div>
+          </div>
+          <div aria-label="Bình luận dưới tên anh grab zui tính vào 2 ngày trước">
+            <div data-sl-comment>
+              <span data-sl-comment-body>ExcitingLynx6404 được nha</span>
+              <a href="/groups/1/posts/post-anonymous-thread/?comment_id=comment-root&amp;reply_comment_id=reply-second-branch-answer">2 ngày</a>
+            </div>
+          </div>
+        </article>
+      `,
+      {
+        url: "https://www.facebook.com/groups/1/posts/post-anonymous-thread/"
+      }
+    );
+    const adapter = new FacebookDomAdapter(
+      dom.window.document,
+      dom.window.location.href,
+      now
+    );
+
+    const comments = adapter.extractComments({
+      postExternalId: "post-anonymous-thread",
+      maxComments: 20
+    });
+
+    expect(
+      comments.map((comment) => ({
+        id: comment.externalId,
+        parent: comment.parentCommentExternalId,
+        kind: comment.author.authorKind,
+        name: comment.author.authorName
+      }))
+    ).toEqual([
+      { id: "comment-root", parent: null, kind: "real", name: "anh grab zui tính" },
+      { id: "reply-anonymous", parent: "comment-root", kind: "anonymous", name: null },
+      { id: "reply-nested-anonymous", parent: "reply-anonymous", kind: "anonymous", name: null },
+      { id: "reply-author-followup", parent: "reply-anonymous", kind: "real", name: "anh grab zui tính" },
+      { id: "reply-second-branch", parent: "comment-root", kind: "real", name: "ExcitingLynx6404" },
+      { id: "reply-second-branch-answer", parent: "reply-second-branch", kind: "real", name: "anh grab zui tính" }
+    ]);
+    expect(JSON.stringify(comments)).not.toContain(
+      "Người tham gia ẩn danh 820"
+    );
+    const anonymousComments = comments.filter(
+      (comment) => comment.author.authorKind === "anonymous"
+    );
+    expect(anonymousComments).toHaveLength(2);
+    expect(
+      anonymousComments.every((comment) =>
+        Number.isInteger(comment.author.anonymousAvatarVariant)
+      )
+    ).toBe(true);
   });
 });
 

@@ -1,5 +1,6 @@
 import { canonicalGroupUrl } from "../content/facebook-urls";
 import type {
+  CrawlCheckpoint,
   CrawlKeyword,
   CrawlLimits,
   CrawlSource,
@@ -147,13 +148,47 @@ function parseTasks(value: unknown): CrawlTask[] {
     const candidate = record(entry);
     const id = stringValue(candidate["id"]) ?? stringValue(candidate["taskId"]);
     if (!id) continue;
-    tasks.push({
+    const rawState = stringValue(candidate["state"]);
+    const state =
+      rawState === "running" ||
+      rawState === "completed" ||
+      rawState === "failed"
+        ? rawState
+        : "pending";
+    const checkpointRaw = record(candidate["checkpoint"]);
+    const phase = checkpointRaw["phase"];
+    const sourceIndex = checkpointRaw["sourceIndex"];
+    const keywordIndex = checkpointRaw["keywordIndex"];
+    const postIndex = checkpointRaw["postIndex"];
+    const checkpoint: CrawlCheckpoint | undefined =
+      (phase === "start" ||
+        phase === "groups_uploaded" ||
+        phase === "search_uploaded" ||
+        phase === "comments_uploaded" ||
+        phase === "done") &&
+      Number.isSafeInteger(sourceIndex) &&
+      Number(sourceIndex) >= 0 &&
+      Number.isSafeInteger(keywordIndex) &&
+      Number(keywordIndex) >= 0 &&
+      Number.isSafeInteger(postIndex) &&
+      Number(postIndex) >= 0
+        ? {
+            phase: phase as CrawlCheckpoint["phase"],
+            sourceIndex: Number(sourceIndex),
+            keywordIndex: Number(keywordIndex),
+            postIndex: Number(postIndex)
+          }
+        : undefined;
+    const task: CrawlTask = {
       id: id.slice(0, 128),
       sourceId:
         stringValue(candidate["sourceId"])?.slice(0, 128) ?? null,
       keywordId:
-        stringValue(candidate["keywordId"])?.slice(0, 128) ?? null
-    });
+        stringValue(candidate["keywordId"])?.slice(0, 128) ?? null,
+      state
+    };
+    if (checkpoint) task.checkpoint = checkpoint;
+    tasks.push(task);
   }
   return tasks;
 }

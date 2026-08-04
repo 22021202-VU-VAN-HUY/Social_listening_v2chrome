@@ -9,9 +9,13 @@ import {
 
 export interface ManagedTab {
   id?: number;
+  windowId?: number;
   url?: string;
   pendingUrl?: string;
   openerTabId?: number;
+  active?: boolean;
+  discarded?: boolean;
+  frozen?: boolean;
   status?: "loading" | "complete" | "unloaded";
 }
 
@@ -19,6 +23,7 @@ export interface TabsPort {
   create(properties: {
     url: string;
     active: boolean;
+    isolatedWindow?: boolean;
   }): Promise<ManagedTab>;
   get(tabId: number): Promise<ManagedTab>;
   update(
@@ -38,14 +43,43 @@ function chromeTabsPort(): TabsPort {
   const toManaged = (tab: chrome.tabs.Tab): ManagedTab => {
     const managed: ManagedTab = {};
     if (tab.id !== undefined) managed.id = tab.id;
+    managed.windowId = tab.windowId;
     if (tab.url !== undefined) managed.url = tab.url;
     if (tab.pendingUrl !== undefined) managed.pendingUrl = tab.pendingUrl;
     if (tab.openerTabId !== undefined) managed.openerTabId = tab.openerTabId;
+    managed.active = tab.active;
+    managed.discarded = tab.discarded;
+    if (tab.frozen !== undefined) managed.frozen = tab.frozen;
     if (tab.status !== undefined) managed.status = tab.status;
     return managed;
   };
   return {
-    create: async (properties) => toManaged(await chrome.tabs.create(properties)),
+    create: async (properties) => {
+      if (!properties.isolatedWindow) {
+        return toManaged(await chrome.tabs.create(properties));
+      }
+      const runnerWindow = await chrome.windows.create({
+        url: properties.url,
+        type: "popup",
+        focused: false,
+        width: 1_200,
+        height: 900
+      });
+      const createdTab =
+        runnerWindow?.tabs?.[0] ??
+        (runnerWindow?.id !== undefined
+          ? (
+              await chrome.tabs.query({
+                windowId: runnerWindow.id,
+                active: true
+              })
+            )[0]
+          : undefined);
+      if (!createdTab) {
+        throw new Error("Chrome did not return the isolated runner tab.");
+      }
+      return toManaged(createdTab);
+    },
     get: async (tabId) => toManaged(await chrome.tabs.get(tabId)),
     update: async (tabId, properties) => {
       const tab = await chrome.tabs.update(tabId, properties);
@@ -64,6 +98,24 @@ function chromeTabsPort(): TabsPort {
 
 function delay(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+async function withTimeout<T>(
+  operation: Promise<T>,
+  timeoutMs: number,
+  message: string
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      operation,
+      new Promise<T>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+      })
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
 }
 
 function isMissingTabError(error: unknown): boolean {
@@ -121,9 +173,11 @@ export class TabLeaseManager {
   private async recordWithoutTab(record: RunnerRecord): Promise<RunnerRecord> {
     const {
       tabId,
+      windowId,
       ...withoutTab
     } = record;
     void tabId;
+    void windowId;
     await this.storage.saveRunner(withoutTab);
     return withoutTab;
   }
@@ -137,8 +191,23 @@ export class TabLeaseManager {
 
       if (record.tabId !== undefined) {
         const existing = await this.getTab(record.tabId);
-        if (existing) {
+        if (
+          existing &&
+          record.windowId !== undefined &&
+          existing.windowId === record.windowId &&
+          existing.active !== false &&
+          !existing.discarded &&
+          !existing.frozen
+        ) {
           return record.tabId;
+        }
+        if (existing) {
+          if (!(await this.verifyOwnership(existing, record.tabId, runId))) {
+            throw new Error(
+              "Cannot migrate an unverified Facebook tab into the isolated runner window."
+            );
+          }
+          await this.tabs.remove(record.tabId);
         }
         record = await this.recordWithoutTab(record);
       }
@@ -146,18 +215,25 @@ export class TabLeaseManager {
       await this.storage.patchRunner(runId, { phase: "reserving_tab" });
       const placeholder = await this.tabs.create({
         url: this.runnerUrl(runId),
-        active: false
+        active: true,
+        isolatedWindow: true
       });
       if (placeholder.id === undefined) {
         throw new Error("Chrome did not return the runner tab ID.");
       }
 
       const tabId = placeholder.id;
-      await this.storage.patchRunner(runId, { tabId, phase: "opening_facebook" });
+      await this.storage.patchRunner(runId, {
+        tabId,
+        ...(placeholder.windowId !== undefined
+          ? { windowId: placeholder.windowId }
+          : {}),
+        phase: "opening_facebook"
+      });
       try {
         await this.tabs.update(tabId, {
           url: withRunMarker(FACEBOOK_HOME_URL, runId),
-          active: false,
+          active: true,
           autoDiscardable: false
         });
       } catch (error) {
@@ -185,7 +261,7 @@ export class TabLeaseManager {
     }
     await this.tabs.update(tabId, {
       url: withRunMarker(targetUrl, runId),
-      active: false,
+      active: true,
       autoDiscardable: false
     });
   }
@@ -200,6 +276,12 @@ export class TabLeaseManager {
     while (Date.now() < deadline) {
       try {
         const before = await this.tabs.get(tabId);
+        if (before.active === false || before.discarded || before.frozen) {
+          await this.tabs.update(tabId, {
+            active: true,
+            autoDiscardable: false
+          });
+        }
         const beforeUrl = before.url ?? before.pendingUrl ?? "";
         let ping: ContentEnvelope | null = null;
         try {
@@ -290,6 +372,24 @@ export class TabLeaseManager {
     throw new Error("Facebook content command failed after channel recovery.");
   }
 
+  public async cancelActiveCommand(tabId: number, runId: string): Promise<void> {
+    const record = await this.storage.getRunner();
+    if (!record || record.runId !== runId || record.tabId !== tabId) {
+      return;
+    }
+    const envelope = (await withTimeout(
+      this.tabs.sendMessage(tabId, {
+        type: "CANCEL_RUN",
+        runId
+      }),
+      5_000,
+      "Facebook content cancellation timed out."
+    )) as ContentEnvelope;
+    if (!envelope?.ok) {
+      throw new Error(envelope?.error ?? "Facebook content cancellation failed.");
+    }
+  }
+
   private async verifyOwnership(
     tab: ManagedTab,
     tabId: number,
@@ -341,9 +441,38 @@ export class TabLeaseManager {
       }
 
       try {
-        await this.command(record.tabId, { type: "CANCEL_RUN", runId });
+        await this.cancelActiveCommand(record.tabId, runId);
       } catch {
         // Cleanup must continue even if the page/content script has already gone.
+      }
+      try {
+        await this.tabs.remove(record.tabId);
+      } catch (error) {
+        if (!isMissingTabError(error)) throw error;
+      }
+      await this.recordWithoutTab(record);
+      return true;
+    });
+  }
+
+  public async forceCloseOwnedTab(jobId: string, runId: string): Promise<boolean> {
+    return this.exclusive(async () => {
+      const record = await this.storage.getRunner();
+      if (
+        !record ||
+        record.jobId !== jobId ||
+        record.runId !== runId ||
+        record.tabId === undefined
+      ) {
+        return false;
+      }
+      const tab = await this.getTab(record.tabId);
+      if (!tab) {
+        await this.recordWithoutTab(record);
+        return true;
+      }
+      if (!(await this.verifyOwnership(tab, record.tabId, runId))) {
+        return false;
       }
       try {
         await this.tabs.remove(record.tabId);
@@ -366,5 +495,13 @@ export class TabLeaseManager {
   public async isOwnedTab(tabId: number): Promise<boolean> {
     const record = await this.storage.getRunner();
     return record?.tabId === tabId;
+  }
+
+  public async acknowledgeRemovedOwnedTab(
+    tabId: number
+  ): Promise<RunnerRecord | null> {
+    const record = await this.storage.getRunner();
+    if (!record || record.tabId !== tabId) return null;
+    return this.recordWithoutTab(record);
   }
 }

@@ -44,7 +44,7 @@ services:
       DATABASE_URL: postgres://listening:listening@postgres:5432/listening
       WORKSPACE_ID: 00000000-0000-4000-8000-000000000001
       DEVICE_ONLINE_SECONDS: 60
-      LEASE_TTL_SECONDS: 45
+      LEASE_TTL_SECONDS: 120
       ADAPTER_VERSION: facebook-dom-v1
       CORS_ORIGINS: "http://localhost:3000,http://127.0.0.1:3000,http://localhost:${WEB_PORT:-3000},http://127.0.0.1:${WEB_PORT:-3000},https://listening-socialmediav2.m-ilestyler431554.chatgpt.site"
     ports:
@@ -71,6 +71,15 @@ services:
     environment:
       NODE_ENV: production
       DATABASE_URL: postgres://listening:listening@postgres:5432/listening
+      WORKSPACE_ID: 00000000-0000-4000-8000-000000000001
+      THREADS_ACCESS_TOKEN: ${THREADS_ACCESS_TOKEN:-}
+      THREADS_GRAPH_BASE_URL: ${THREADS_GRAPH_BASE_URL:-https://graph.threads.net}
+      THREADS_API_VERSION: ${THREADS_API_VERSION:-v1.0}
+      THREADS_POLL_MS: ${THREADS_POLL_MS:-2000}
+      THREADS_PAGE_SIZE: ${THREADS_PAGE_SIZE:-100}
+      THREADS_MAX_PAGES_PER_TASK: ${THREADS_MAX_PAGES_PER_TASK:-10}
+      THREADS_MAX_ATTEMPTS: ${THREADS_MAX_ATTEMPTS:-3}
+      THREADS_MAX_REQUESTS_PER_JOB: ${THREADS_MAX_REQUESTS_PER_JOB:-0}
       SENTIMENT_PROVIDER: ${SENTIMENT_PROVIDER:-auto}
       SENTIMENT_MODEL: ${SENTIMENT_MODEL:-sentiment-development}
       SENTIMENT_BASE_URL: ${SENTIMENT_BASE_URL:-http://localhost:11434}

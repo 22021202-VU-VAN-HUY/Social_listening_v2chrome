@@ -3,8 +3,8 @@
 ## Nguyên tắc phạm vi
 
 - `post` vừa là metadata/ngữ cảnh của comment vừa có thể được phân tích sentiment riêng.
-- `comment` bao gồm cả bình luận cấp đầu và reply. Post/comment/reply chỉ được đưa vào AI
-  khi người dùng chủ động bấm `Phân tích tất cả`.
+- `comment` lưu cả bình luận cấp đầu và reply. Cả hai được đưa vào AI và tính
+  chung trong báo cáo; `parent_comment_id` chỉ dùng để dựng cây hội thoại.
 - Keyword được khớp trên bài post. Mỗi comment trả về toàn bộ keyword đã khớp của bài post.
 - Mọi timestamp là ISO 8601 có múi giờ. Không suy đoán thời gian khi Facebook không cung cấp
   đủ thông tin.
@@ -16,11 +16,12 @@
 | `authorName` | `string \| null` | Chỉ tên hiển thị tại thời điểm crawl. |
 | `isAnonymous` | `boolean` | `true` khi Facebook hiển thị tác giả ẩn danh. |
 | `authorKind` | `real \| anonymous \| unknown` | Loại tác giả đã nhận diện. |
+| `anonymousAvatarVariant` | `0..7 \| null` | Nhóm màu trực quan theo bài viết cho tác giả ẩn danh; không phải ID người dùng và không dùng để liên kết giữa các bài. |
 
 Quy tắc bắt buộc:
 
 - người dùng thật: `authorName` có giá trị, `isAnonymous=false`, `authorKind=real`;
-- ẩn danh: `authorName=null`, `isAnonymous=true`, `authorKind=anonymous`;
+- ẩn danh: `authorName=null`, `isAnonymous=true`, `authorKind=anonymous`; có thể kèm `anonymousAvatarVariant` để phân biệt màu avatar trong cùng bài;
 - không xác định: `authorName=null`, `isAnonymous=false`, `authorKind=unknown`;
   UI hiển thị “Không xác định”, không gộp với “Ẩn danh”.
 

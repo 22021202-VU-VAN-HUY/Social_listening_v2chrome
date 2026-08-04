@@ -24,6 +24,16 @@ interface CoverageAssessment {
   partialReason?: string;
 }
 
+export interface CrawlProgressSignal {
+  type: "CRAWL_PROGRESS";
+  runId: string;
+  operation: "discover_groups" | "crawl_search" | "crawl_post";
+  round: number;
+  itemsSeen: number;
+}
+
+type ProgressReporter = (progress: CrawlProgressSignal) => void | Promise<void>;
+
 function assessBoundedCoverage(
   hitLimit: boolean,
   explicitEndProven: boolean,
@@ -145,13 +155,33 @@ export class FacebookContentRunner {
 
   public constructor(
     private readonly document: Document,
-    private readonly win: Window
+    private readonly win: Window,
+    private readonly reportProgress: ProgressReporter = () => undefined
   ) {
     this.assignedRunId =
       readRunMarker(win.location.href) ?? safeSessionGet(win) ?? null;
     if (this.assignedRunId) {
       safeSessionSet(win, this.assignedRunId);
     }
+  }
+
+  private progress(
+    runId: string,
+    operation: CrawlProgressSignal["operation"],
+    round: number,
+    itemsSeen: number
+  ): void {
+    void Promise.resolve(
+      this.reportProgress({
+        type: "CRAWL_PROGRESS",
+        runId,
+        operation,
+        round,
+        itemsSeen
+      })
+    ).catch(() => {
+      // Progress telemetry must never interrupt the read-only crawl itself.
+    });
   }
 
   private adapter(): FacebookDomAdapter {
@@ -190,6 +220,44 @@ export class FacebookContentRunner {
       clicked += 1;
     }
     return clicked;
+  }
+
+  private async clickSafeControlsAndWait(
+    mode: SafeReadControlMode,
+    timeoutMs: number,
+    signal: AbortSignal
+  ): Promise<{ changed: boolean; clicked: number }> {
+    if (signal.aborted) throw abortError();
+    let clicked = 0;
+    const changed = await new Promise<boolean>((resolve, reject) => {
+      let settled = false;
+      const finish = (value: boolean): void => {
+        if (settled) return;
+        settled = true;
+        observer.disconnect();
+        clearTimeout(timer);
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      };
+      const onAbort = (): void => {
+        if (settled) return;
+        settled = true;
+        observer.disconnect();
+        clearTimeout(timer);
+        reject(abortError());
+      };
+      const observer = new MutationObserver(() => finish(true));
+      observer.observe(this.document.documentElement, {
+        childList: true,
+        subtree: true,
+        attributes: false
+      });
+      const timer = setTimeout(() => finish(false), timeoutMs);
+      signal.addEventListener("abort", onAbort, { once: true });
+      clicked = this.clickSafeControls(mode);
+      if (clicked === 0) finish(false);
+    });
+    return { changed, clicked };
   }
 
   private findSafeControl(
@@ -290,13 +358,137 @@ export class FacebookContentRunner {
     }
   }
 
-  private async scrollOnce(
-    mode: "groups" | "posts" | "comments",
+  private isRecentPostsControlSelected(element: Element): boolean {
+    if (!isSafeReadControlElement("post_filter_option", element)) {
+      return false;
+    }
+    if (element.hasAttribute("aria-haspopup")) return true;
+    return (
+      element.getAttribute("aria-checked") === "true" ||
+      element.getAttribute("aria-pressed") === "true" ||
+      element.getAttribute("aria-selected") === "true" ||
+      /^(active|checked|selected)$/u.test(
+        element.getAttribute("data-state") ?? ""
+      )
+    );
+  }
+
+  private findSelectedRecentPostsControl(
+    selector: string
+  ): HTMLElement | null {
+    for (const element of this.document.querySelectorAll(selector)) {
+      if (this.isRecentPostsControlSelected(element)) {
+        return element as HTMLElement;
+      }
+    }
+    return null;
+  }
+
+  private async waitForRecentPostsSelection(
+    selector: string,
     timeoutMs: number,
     signal: AbortSignal
   ): Promise<boolean> {
     if (signal.aborted) throw abortError();
-    this.clickSafeControls(mode);
+    if (this.findSelectedRecentPostsControl(selector)) return true;
+
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      const finish = (selected: boolean): void => {
+        if (settled) return;
+        settled = true;
+        observer.disconnect();
+        clearTimeout(timer);
+        signal.removeEventListener("abort", onAbort);
+        resolve(selected);
+      };
+      const onAbort = (): void => {
+        if (settled) return;
+        settled = true;
+        observer.disconnect();
+        clearTimeout(timer);
+        reject(abortError());
+      };
+      const observer = new MutationObserver(() => {
+        if (this.findSelectedRecentPostsControl(selector)) finish(true);
+      });
+      observer.observe(this.document.documentElement, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        attributeFilter: [
+          "aria-label",
+          "aria-checked",
+          "aria-pressed",
+          "aria-selected",
+          "data-state"
+        ]
+      });
+      const timer = setTimeout(() => finish(false), timeoutMs);
+      signal.addEventListener("abort", onAbort, { once: true });
+      if (this.findSelectedRecentPostsControl(selector)) finish(true);
+    });
+  }
+
+  private async selectRecentPostsFilter(
+    timeoutMs: number,
+    signal: AbortSignal
+  ): Promise<boolean> {
+    const optionSelector =
+      "[role='menuitem'], [role='menuitemradio'], [role='menuitemcheckbox'], [role='radio'], [role='checkbox']";
+    const triggerSelector = "button, [role='button']";
+    const allSelectors = `${triggerSelector}, ${optionSelector}`;
+
+    if (this.findSelectedRecentPostsControl(allSelectors)) return true;
+
+    const visibleOption = this.findSafeControl(
+      "post_filter_option",
+      allSelectors
+    );
+    if (visibleOption) {
+      if (!this.clickVerifiedControl("post_filter_option", visibleOption)) {
+        return false;
+      }
+      return this.waitForRecentPostsSelection(
+        allSelectors,
+        timeoutMs,
+        signal
+      );
+    }
+
+    const trigger = this.findSafeControl(
+      "post_filter_trigger",
+      triggerSelector
+    );
+    if (!trigger) return false;
+    if (!this.clickVerifiedControl("post_filter_trigger", trigger)) {
+      return false;
+    }
+
+    const option = await this.waitForSafeControl(
+      "post_filter_option",
+      optionSelector,
+      timeoutMs,
+      signal
+    );
+    if (!option || !this.clickVerifiedControl("post_filter_option", option)) {
+      return false;
+    }
+    return this.waitForRecentPostsSelection(
+      allSelectors,
+      timeoutMs,
+      signal
+    );
+  }
+
+  private async scrollOnce(
+    mode: "groups" | "posts" | "comments",
+    timeoutMs: number,
+    signal: AbortSignal,
+    clickControls = true
+  ): Promise<boolean> {
+    if (signal.aborted) throw abortError();
+    if (clickControls) this.clickSafeControls(mode);
     const before = this.document.documentElement.scrollHeight;
     const groupScroller =
       mode === "groups" ? this.findJoinedGroupsScroller() : null;
@@ -351,6 +543,7 @@ export class FacebookContentRunner {
     { type: "DISCOVER_GROUPS" }
   >): Promise<DiscoverGroupsResult> {
     const signal = this.beginOperation(command.runId);
+    this.progress(command.runId, "discover_groups", 0, 0);
     const byId = new Map<string, SafeSourceDto>();
     let plateau = 0;
     let hitLimit = false;
@@ -378,6 +571,9 @@ export class FacebookContentRunner {
         command.limits.mutationWaitMs,
         signal
       );
+      if (byId.size > before) {
+        this.progress(command.runId, "discover_groups", round + 1, byId.size);
+      }
       plateau = byId.size === before && !changed ? plateau + 1 : 0;
       if (plateau >= 2 && expectedCount === null) break;
     }
@@ -403,9 +599,14 @@ export class FacebookContentRunner {
     { type: "CRAWL_SEARCH" }
   >): Promise<CrawlSearchResult> {
     const signal = this.beginOperation(command.runId);
+    this.progress(command.runId, "crawl_search", 0, 0);
     const byId = new Map<string, SafePostDto>();
     let plateau = 0;
     let hitLimit = false;
+    const recentPostsSelected = await this.selectRecentPostsFilter(
+      command.limits.mutationWaitMs,
+      signal
+    );
 
     for (let round = 0; round < command.limits.maxScrollRounds; round += 1) {
       const before = byId.size;
@@ -429,14 +630,22 @@ export class FacebookContentRunner {
         command.limits.mutationWaitMs,
         signal
       );
+      if (byId.size > before) {
+        this.progress(command.runId, "crawl_search", round + 1, byId.size);
+      }
       plateau = byId.size === before && !changed ? plateau + 1 : 0;
       if (plateau >= 2) break;
     }
 
-    const coverage = assessPostSearchCoverage(
-      hitLimit,
-      this.adapter().hasExplicitPostSearchEnd()
-    );
+    const coverage = recentPostsSelected
+      ? assessPostSearchCoverage(
+          hitLimit,
+          this.adapter().hasExplicitPostSearchEnd()
+        )
+      : {
+          coverageStatus: "partial" as const,
+          partialReason: "recent_posts_filter_unconfirmed"
+        };
     const result: CrawlSearchResult = {
       posts: [...byId.values()],
       ...coverage
@@ -450,6 +659,7 @@ export class FacebookContentRunner {
     { type: "CRAWL_POST" }
   >): Promise<CrawlPostResult> {
     const signal = this.beginOperation(command.runId);
+    this.progress(command.runId, "crawl_post", 0, 0);
     const byId = new Map<string, SafeCommentDto>();
     let plateau = 0;
     let hitLimit = false;
@@ -465,7 +675,6 @@ export class FacebookContentRunner {
       round += 1
     ) {
       const before = byId.size;
-      this.clickSafeControls("comments");
       for (const comment of this.adapter().extractComments({
         postExternalId: command.postExternalId,
         maxComments: command.limits.maxCommentsPerPost
@@ -477,12 +686,27 @@ export class FacebookContentRunner {
         break;
       }
 
-      const changed = await this.scrollOnce(
+      const expansion = await this.clickSafeControlsAndWait(
         "comments",
         command.limits.mutationWaitMs,
         signal
       );
-      plateau = byId.size === before && !changed ? plateau + 1 : 0;
+      const changed = await this.scrollOnce(
+        "comments",
+        command.limits.mutationWaitMs,
+        signal,
+        false
+      );
+      if (byId.size > before) {
+        this.progress(command.runId, "crawl_post", round + 1, byId.size);
+      }
+      plateau =
+        byId.size === before &&
+        expansion.clicked === 0 &&
+        !expansion.changed &&
+        !changed
+          ? plateau + 1
+          : 0;
       if (plateau >= 2) break;
     }
 

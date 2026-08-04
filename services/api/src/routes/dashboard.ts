@@ -109,9 +109,7 @@ export function registerDashboardRoutes(
         )
         SELECT count(*)::text AS total,
                count(DISTINCT post_id)::text AS posts,
-               count(*) FILTER (
-                 WHERE parent_comment_id IS NULL
-               )::text AS comments,
+               count(*)::text AS comments,
                count(*) FILTER (
                  WHERE parent_comment_id IS NOT NULL
                )::text AS replies,
@@ -120,13 +118,13 @@ export function registerDashboardRoutes(
                )::text AS unknown_time,
                count(*) FILTER (WHERE is_relevant = true)::text AS relevant,
                count(*) FILTER (
-                 WHERE is_relevant = true AND label = 'positive'
+                 WHERE label = 'positive'
                )::text AS positive,
                count(*) FILTER (
-                 WHERE is_relevant = true AND label = 'negative'
+                 WHERE label = 'negative'
                )::text AS negative,
                count(*) FILTER (
-                 WHERE is_relevant = true AND label = 'neutral'
+                 WHERE label = 'neutral'
                )::text AS neutral,
                count(*) FILTER (WHERE label IS NULL)::text AS pending_analysis
         FROM enriched
@@ -173,7 +171,7 @@ export function registerDashboardRoutes(
                label,
                count(*)::text AS count
         FROM enriched
-        WHERE is_relevant = true AND label IS NOT NULL
+        WHERE label IS NOT NULL
         GROUP BY date, label
         ORDER BY date, label
       `,

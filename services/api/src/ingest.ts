@@ -11,6 +11,8 @@ import { keywordMatches } from "./keywords.js";
 import {
   assertNoIdentityTrackingFields,
   authorForStorage,
+  facebookCommentExternalIdFromUrl,
+  facebookPostExternalIdFromUrl,
   sanitizeFacebookContentUrl,
   sanitizeFacebookGroupUrl,
 } from "./privacy.js";
@@ -316,6 +318,13 @@ export async function ingestContentBatch(
     if (!canonicalUrl) {
       throw new Error("Post URL is required");
     }
+    if (facebookPostExternalIdFromUrl(canonicalUrl) !== post.externalId) {
+      throw new ApiError(
+        400,
+        "POST_ID_URL_MISMATCH",
+        `Post ${post.externalId} does not match its canonical Facebook URL`,
+      );
+    }
     const contentHash = calculateChecksum({
       body: post.body,
       publishedAt: post.publishedAt,
@@ -338,11 +347,12 @@ export async function ingestContentBatch(
           author_name,
           is_anonymous,
           author_kind,
+          anonymous_avatar_variant,
           content_hash
         )
         VALUES (
           $1, $2, $3, $3, 'facebook', $4, $5, $6, $7, $8, $9,
-          $10, $11, $12, $13
+          $10, $11, $12, $13, $14
         )
         ON CONFLICT (workspace_id, platform, external_id)
         DO UPDATE SET
@@ -356,6 +366,7 @@ export async function ingestContentBatch(
           author_name = EXCLUDED.author_name,
           is_anonymous = EXCLUDED.is_anonymous,
           author_kind = EXCLUDED.author_kind,
+          anonymous_avatar_variant = EXCLUDED.anonymous_avatar_variant,
           content_hash = EXCLUDED.content_hash,
           updated_at = now()
         RETURNING id
@@ -373,6 +384,7 @@ export async function ingestContentBatch(
         author.authorName,
         author.isAnonymous,
         author.authorKind,
+        author.anonymousAvatarVariant,
         contentHash,
       ],
     );
@@ -472,6 +484,28 @@ export async function ingestContentBatch(
 
     const author = authorForStorage(comment.author);
     const canonicalUrl = sanitizeFacebookContentUrl(comment.url);
+    if (canonicalUrl) {
+      const urlPostExternalId = facebookPostExternalIdFromUrl(canonicalUrl);
+      const urlCommentExternalId =
+        facebookCommentExternalIdFromUrl(canonicalUrl);
+      if (urlPostExternalId !== comment.postExternalId) {
+        throw new ApiError(
+          400,
+          "COMMENT_POST_ID_URL_MISMATCH",
+          `Comment ${comment.externalId} does not match its parent post URL`,
+        );
+      }
+      if (
+        urlCommentExternalId &&
+        urlCommentExternalId !== comment.externalId
+      ) {
+        throw new ApiError(
+          400,
+          "COMMENT_ID_URL_MISMATCH",
+          `Comment ${comment.externalId} does not match its canonical Facebook URL`,
+        );
+      }
+    }
     const contentHash = calculateChecksum({
       body: comment.body,
       publishedAt: comment.publishedAt,
@@ -494,12 +528,13 @@ export async function ingestContentBatch(
           author_name,
           is_anonymous,
           author_kind,
+          anonymous_avatar_variant,
           observed_order,
           content_hash
         )
         VALUES (
           $1, $2, $3, $3, 'facebook', $4, $5, $6, $7, $8, $9,
-          $10, $11, $12, $13, $14
+          $10, $11, $12, $13, $14, $15
         )
         ON CONFLICT (workspace_id, platform, external_id)
         DO UPDATE SET
@@ -513,6 +548,7 @@ export async function ingestContentBatch(
           author_name = EXCLUDED.author_name,
           is_anonymous = EXCLUDED.is_anonymous,
           author_kind = EXCLUDED.author_kind,
+          anonymous_avatar_variant = EXCLUDED.anonymous_avatar_variant,
           observed_order = EXCLUDED.observed_order,
           content_hash = EXCLUDED.content_hash,
           updated_at = now()
@@ -531,6 +567,7 @@ export async function ingestContentBatch(
         author.authorName,
         author.isAnonymous,
         author.authorKind,
+        author.anonymousAvatarVariant,
         comment.observedOrder ?? commentIndex,
         contentHash,
       ],

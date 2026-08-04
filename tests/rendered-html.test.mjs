@@ -52,7 +52,7 @@ test("server-renders the Vietnamese dashboard", async () => {
   assertProductPage(html);
   assert.match(html, /<title>Tổng quan · Social Listening<\/title>/i);
   assert.match(html, /Đang dựng bức tranh thảo luận/i);
-  assert.match(html, /Kết nối bình luận, phản hồi và AI sentiment/i);
+  assert.match(html, /Kết nối bình luận, luồng hội thoại và AI sentiment/i);
 });
 
 test("server-renders Facebook collection settings", async () => {

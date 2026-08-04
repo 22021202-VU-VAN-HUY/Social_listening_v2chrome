@@ -273,18 +273,20 @@ function isOwnedByCommentRoot(root: Element, element: Element): boolean {
 }
 
 function commentAuthorFromAriaLabel(root: Element): string {
-  const label = (root.getAttribute("aria-label") ?? "")
-    .replace(/\s+/gu, " ")
-    .trim();
-  if (!label) return "";
-
-  for (const pattern of [
-    /^Bình luận dưới tên (.+?)(?: vào | lúc | · |$)/iu,
-    /^Bình luận của (.+?)(?: vào | lúc | · |$)/iu,
-    /^Comment by (.+?)(?: at | on | · |$)/iu
-  ]) {
-    const candidate = pattern.exec(label)?.[1]?.trim();
-    if (candidate) return candidate;
+  let current: Element | null = root;
+  for (let level = 0; current && level < 6; level += 1) {
+    const label = (current.getAttribute("aria-label") ?? "")
+      .replace(/\s+/gu, " ")
+      .trim();
+    for (const pattern of [
+      /^Bình luận dưới tên (.+?)(?: vào | lúc | · |$)/iu,
+      /^Bình luận của (.+?)(?: vào | lúc | · |$)/iu,
+      /^Comment by (.+?)(?: at | on | · |$)/iu
+    ]) {
+      const candidate = pattern.exec(label)?.[1]?.trim();
+      if (candidate) return candidate;
+    }
+    current = current.parentElement;
   }
   return "";
 }
@@ -352,9 +354,41 @@ function authorCandidateFromRoot(root: Element, comment: boolean): string {
   return candidate;
 }
 
-function authorFromRoot(root: Element, comment: boolean): SafeAuthorDto {
+function anonymousAvatarVariant(
+  label: string,
+  postExternalId: string,
+  fallbackSeed = ""
+): number {
+  const normalized = normalizedLabel(label);
+  const hasParticipantSuffix = /(?:^|\s)\d{1,6}$/u.test(normalized);
+  const participantSeed = hasParticipantSuffix
+    ? normalized
+    : fallbackSeed || normalized;
+  return Number.parseInt(
+    fnv1a(`${postExternalId}|${participantSeed}`),
+    16
+  ) % 8;
+}
+
+function authorFromRoot(
+  root: Element,
+  comment: boolean,
+  postExternalId = "",
+  anonymousFallbackSeed = ""
+): SafeAuthorDto {
   const candidate = authorCandidateFromRoot(root, comment);
-  return makeSafeAuthor(candidate, isAnonymousAuthorLabel(candidate));
+  const isAnonymous = isAnonymousAuthorLabel(candidate);
+  return makeSafeAuthor(
+    candidate,
+    isAnonymous,
+    isAnonymous && postExternalId
+      ? anonymousAvatarVariant(
+          candidate,
+          postExternalId,
+          anonymousFallbackSeed
+        )
+      : undefined
+  );
 }
 
 function replyTargetAuthorFromBody(root: Element): string {
@@ -370,6 +404,26 @@ function replyTargetAuthorFromBody(root: Element): string {
     }
   }
   return "";
+}
+
+function bodyStartsWithAuthor(body: string, authorLabel: string): boolean {
+  const normalizedBody = normalizedLabel(body);
+  const normalizedAuthor = normalizedLabel(authorLabel);
+  if (!normalizedBody || !normalizedAuthor) return false;
+  if (isAnonymousAuthorLabel(authorLabel)) {
+    const suffix = /(?:^|\s)(\d{1,4})$/u.exec(normalizedAuthor)?.[1];
+    const aliases = ANONYMOUS_LABELS.map((label) =>
+      suffix ? `${label} ${suffix}` : label
+    ).sort((left, right) => right.length - left.length);
+    return aliases.some(
+      (alias) =>
+        normalizedBody === alias || normalizedBody.startsWith(`${alias} `)
+    );
+  }
+  return (
+    normalizedBody === normalizedAuthor ||
+    normalizedBody.startsWith(`${normalizedAuthor} `)
+  );
 }
 
 const ENGLISH_MONTH_INDEX = new Map<string, number>([
@@ -922,7 +976,7 @@ export class FacebookDomAdapter {
         matchedKeywordIds: matched.flatMap((keyword) =>
           keyword.id ? [keyword.id] : []
         ),
-        author: authorFromRoot(root, false)
+        author: authorFromRoot(root, false, externalId, externalId)
       });
       if (posts.length >= options.maxPosts) break;
     }
@@ -973,6 +1027,10 @@ export class FacebookDomAdapter {
     const pagePostExternalId = parsePostExternalId(this.pageUrl);
 
     return this.queryCommentRoots(this.document).filter((root) => {
+      // Facebook sometimes puts the aria-label on a wrapper around the actual
+      // comment node. Keep the innermost node that owns the message so wrappers
+      // cannot become fake parents with derived IDs.
+      if (!findCommentBody(root)) return false;
       const url = this.findCommentUrl(root);
       if (url) {
         return parsePostExternalId(url) === postExternalId;
@@ -1035,7 +1093,7 @@ export class FacebookDomAdapter {
         root.getAttribute("data-commentid") ??
         root.getAttribute("data-comment-id") ??
         (url ? parseCommentExternalId(url) : null);
-      const author = authorFromRoot(root, true);
+      const author = authorFromRoot(root, true, options.postExternalId);
       const externalId =
         explicitId ??
         `derived:${fnv1a(
@@ -1077,29 +1135,52 @@ export class FacebookDomAdapter {
       // pointing at the top-level comment. The visible @name at the beginning
       // of the reply is the only safe, name-only signal for the direct parent.
       if (!parentCommentExternalId && urlParentCommentExternalId) {
-        const targetAuthor = normalizedLabel(replyTargetAuthorFromBody(root));
-        if (targetAuthor) {
-          for (let index = rootIndex - 1; index >= 0; index -= 1) {
-            const candidateRoot = roots[index];
-            const candidateUrl = candidateRoot
-              ? (urlsByElement.get(candidateRoot) ?? null)
-              : null;
-            const candidateId = candidateRoot
-              ? (idsByElement.get(candidateRoot) ?? null)
-              : null;
-            const belongsToThread =
-              candidateId === urlParentCommentExternalId ||
-              (candidateUrl !== null &&
-                parseThreadRootExternalId(candidateUrl) ===
-                  urlParentCommentExternalId);
-            if (
-              candidateRoot &&
-              belongsToThread &&
-              authorLabelsByElement.get(candidateRoot) === targetAuthor
-            ) {
-              parentCommentExternalId = candidateId;
-              break;
-            }
+        const linkedTargetAuthor = normalizedLabel(
+          replyTargetAuthorFromBody(root)
+        );
+        const targetsCandidate = (candidateRoot: Element): boolean =>
+          linkedTargetAuthor
+            ? authorLabelsByElement.get(candidateRoot) === linkedTargetAuthor
+            : bodyStartsWithAuthor(
+                body,
+                authorCandidateFromRoot(candidateRoot, true)
+              );
+        const threadRoot = roots
+          .slice(0, rootIndex)
+          .find(
+            (candidateRoot) =>
+              idsByElement.get(candidateRoot) ===
+                urlParentCommentExternalId &&
+              targetsCandidate(candidateRoot)
+          );
+        if (threadRoot) {
+          parentCommentExternalId =
+            idsByElement.get(threadRoot) ?? urlParentCommentExternalId;
+        }
+        for (
+          let index = rootIndex - 1;
+          !parentCommentExternalId && index >= 0;
+          index -= 1
+        ) {
+          const candidateRoot = roots[index];
+          const candidateUrl = candidateRoot
+            ? (urlsByElement.get(candidateRoot) ?? null)
+            : null;
+          const candidateId = candidateRoot
+            ? (idsByElement.get(candidateRoot) ?? null)
+            : null;
+          const belongsToThread =
+            candidateId === urlParentCommentExternalId ||
+            (candidateUrl !== null &&
+              parseThreadRootExternalId(candidateUrl) ===
+                urlParentCommentExternalId);
+          if (
+            candidateRoot &&
+            belongsToThread &&
+            targetsCandidate(candidateRoot)
+          ) {
+            parentCommentExternalId = candidateId;
+            break;
           }
         }
       }
@@ -1119,7 +1200,12 @@ export class FacebookDomAdapter {
         collectedAt: this.now.toISOString(),
         timeParseStatus: timestamp.timeParseStatus,
         observedOrder: rootIndex,
-        author: authorFromRoot(root, true)
+        author: authorFromRoot(
+          root,
+          true,
+          options.postExternalId,
+          externalId
+        )
       });
       if (comments.length >= options.maxComments) break;
     }

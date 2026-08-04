@@ -5,6 +5,15 @@ export interface MergedPostResult {
   hasNewKeywordHit: boolean;
 }
 
+export function claimPostForCommentCrawl(
+  crawledPostExternalIds: Set<string>,
+  externalId: string
+): boolean {
+  if (crawledPostExternalIds.has(externalId)) return false;
+  crawledPostExternalIds.add(externalId);
+  return true;
+}
+
 /**
  * A post can appear in multiple Facebook group-search result pages. Preserve
  * every server keyword ID while keeping one canonical parent-post record.

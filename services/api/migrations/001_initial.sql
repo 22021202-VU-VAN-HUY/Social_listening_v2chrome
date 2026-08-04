@@ -233,13 +233,16 @@ CREATE TABLE IF NOT EXISTS posts (
   author_name text CHECK (author_name IS NULL OR length(author_name) BETWEEN 1 AND 200),
   is_anonymous boolean NOT NULL DEFAULT false,
   author_kind text NOT NULL CHECK (author_kind IN ('real', 'anonymous', 'unknown')),
+  anonymous_avatar_variant smallint CHECK (
+    anonymous_avatar_variant IS NULL OR anonymous_avatar_variant BETWEEN 0 AND 7
+  ),
   content_hash text NOT NULL,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT posts_author_shape_check CHECK (
     (author_kind = 'anonymous' AND is_anonymous = true AND author_name IS NULL)
-    OR (author_kind = 'real' AND is_anonymous = false AND author_name IS NOT NULL)
-    OR (author_kind = 'unknown' AND is_anonymous = false AND author_name IS NULL)
+    OR (author_kind = 'real' AND is_anonymous = false AND author_name IS NOT NULL AND anonymous_avatar_variant IS NULL)
+    OR (author_kind = 'unknown' AND is_anonymous = false AND author_name IS NULL AND anonymous_avatar_variant IS NULL)
   ),
   CONSTRAINT posts_time_shape_check CHECK (
     (time_parse_status = 'parsed' AND published_at IS NOT NULL)
@@ -265,13 +268,16 @@ CREATE TABLE IF NOT EXISTS comments (
   author_name text CHECK (author_name IS NULL OR length(author_name) BETWEEN 1 AND 200),
   is_anonymous boolean NOT NULL DEFAULT false,
   author_kind text NOT NULL CHECK (author_kind IN ('real', 'anonymous', 'unknown')),
+  anonymous_avatar_variant smallint CHECK (
+    anonymous_avatar_variant IS NULL OR anonymous_avatar_variant BETWEEN 0 AND 7
+  ),
   content_hash text NOT NULL,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT comments_author_shape_check CHECK (
     (author_kind = 'anonymous' AND is_anonymous = true AND author_name IS NULL)
-    OR (author_kind = 'real' AND is_anonymous = false AND author_name IS NOT NULL)
-    OR (author_kind = 'unknown' AND is_anonymous = false AND author_name IS NULL)
+    OR (author_kind = 'real' AND is_anonymous = false AND author_name IS NOT NULL AND anonymous_avatar_variant IS NULL)
+    OR (author_kind = 'unknown' AND is_anonymous = false AND author_name IS NULL AND anonymous_avatar_variant IS NULL)
   ),
   CONSTRAINT comments_time_shape_check CHECK (
     (time_parse_status = 'parsed' AND published_at IS NOT NULL)

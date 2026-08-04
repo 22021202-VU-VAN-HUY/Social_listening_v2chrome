@@ -6,7 +6,9 @@ const contentScope = globalThis as typeof globalThis & Record<string, unknown>;
 
 if (contentScope[CONTENT_READY_KEY] !== true) {
   contentScope[CONTENT_READY_KEY] = true;
-  const runner = new FacebookContentRunner(document, window);
+  const runner = new FacebookContentRunner(document, window, async (progress) => {
+    await chrome.runtime.sendMessage(progress);
+  });
 
   chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) => {
     if (sender.id !== chrome.runtime.id || !isReadOnlyContentCommand(message)) {

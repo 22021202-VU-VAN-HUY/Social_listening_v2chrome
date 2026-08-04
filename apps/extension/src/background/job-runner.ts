@@ -5,7 +5,10 @@ import {
   FACEBOOK_JOINED_GROUPS_URL
 } from "../content/facebook-urls";
 import { ExtensionStorage } from "../shared/storage";
-import { mergePostKeywordHits } from "../shared/post-merge";
+import {
+  claimPostForCommentCrawl,
+  mergePostKeywordHits
+} from "../shared/post-merge";
 import type {
   AuthState,
   CrawlCheckpoint,
@@ -22,6 +25,10 @@ import {
   isTransientMessageChannelError,
   TabLeaseManager
 } from "./tab-lease-manager";
+import {
+  checkpointForClaim,
+  isCrawlStalled
+} from "./crawl-recovery";
 
 export interface StartResult {
   accepted: boolean;
@@ -46,6 +53,9 @@ interface ActiveRun {
   runId: string;
   controller: AbortController;
   promise: Promise<void>;
+  lastProgressAt: number;
+  lastProgressPersistedAt: number;
+  watchdogTriggered: boolean;
 }
 
 function defaultCheckpoint(): CrawlCheckpoint {
@@ -67,7 +77,7 @@ function idempotencyKey(
 function errorFromUnknown(error: unknown): JobRunError {
   if (error instanceof JobRunError) return error;
   if (error instanceof ApiError) {
-    const interrupted = error.status === 401 || error.status === 409;
+    const interrupted = error.retryable || error.status === 401 || error.status === 409;
     return new JobRunError(
       error.code,
       error.message,
@@ -180,6 +190,7 @@ export class JobRunner {
         );
       }
       const now = new Date().toISOString();
+      const checkpoint = checkpointForClaim(claim.snapshot);
       const record: RunnerRecord = {
         jobId,
         runId: crypto.randomUUID(),
@@ -190,7 +201,8 @@ export class JobRunner {
         fencingToken: claim.fencingToken,
         leaseExpiresAt: claim.leaseExpiresAt,
         snapshot: claim.snapshot,
-        checkpoint: defaultCheckpoint()
+        checkpoint,
+        lastProgressAt: now
       };
       await this.storage.saveRunner(record);
       this.launch(record);
@@ -205,20 +217,70 @@ export class JobRunner {
       jobId: record.jobId,
       runId: record.runId,
       controller,
-      promise: Promise.resolve()
+      promise: Promise.resolve(),
+      lastProgressAt: Date.now(),
+      lastProgressPersistedAt: Date.now(),
+      watchdogTriggered: false
     };
     this.active = active;
+    let resumeAfterCleanup = false;
     active.promise = this.execute(record, controller.signal)
       .catch(async (error: unknown) => {
-        await this.reportFailure(record.runId, errorFromUnknown(error));
+        const failure = controller.signal.aborted
+          ? errorFromUnknown(controller.signal.reason)
+          : errorFromUnknown(error);
+        resumeAfterCleanup = failure.status === "interrupted" && failure.retryable;
+        await this.reportFailure(record.runId, failure);
       })
       .finally(async () => {
         await this.cleanup(record.jobId, record.runId);
         if (this.active?.runId === record.runId) {
           this.active = null;
         }
+        if (resumeAfterCleanup) {
+          setTimeout(() => void this.reconcile(), 0);
+        }
       });
     void active.promise;
+  }
+
+  private touchProgress(runId: string): void {
+    if (this.active?.runId === runId) {
+      this.active.lastProgressAt = Date.now();
+    }
+  }
+
+  public async recordContentProgress(
+    progress: {
+      runId: string;
+      operation: string;
+      round: number;
+      itemsSeen: number;
+    },
+    tabId: number
+  ): Promise<boolean> {
+    const active = this.active;
+    if (!active || active.runId !== progress.runId || active.watchdogTriggered) {
+      return false;
+    }
+    const record = await this.storage.getRunner();
+    if (
+      !record ||
+      record.runId !== progress.runId ||
+      record.tabId !== tabId
+    ) {
+      return false;
+    }
+
+    const now = Date.now();
+    active.lastProgressAt = now;
+    if (now - active.lastProgressPersistedAt >= 10_000) {
+      active.lastProgressPersistedAt = now;
+      await this.storage.patchRunner(record.runId, {
+        lastProgressAt: new Date(now).toISOString()
+      });
+    }
+    return true;
   }
 
   private requireLease(record: RunnerRecord): {
@@ -272,6 +334,33 @@ export class JobRunner {
     }
   }
 
+  private async abortActiveContentCommand(
+    active: ActiveRun,
+    reason: JobRunError
+  ): Promise<void> {
+    active.controller.abort(reason);
+    const record = await this.storage.getRunner();
+    if (
+      !record ||
+      record.runId !== active.runId ||
+      record.tabId === undefined
+    ) {
+      return;
+    }
+    try {
+      await this.tabs.cancelActiveCommand(record.tabId, record.runId);
+    } catch {
+      // A dead content channel cannot acknowledge cancellation. Closing only
+      // the verified extension-owned tab releases the pending command so the
+      // durable checkpoint can be reclaimed immediately.
+      try {
+        await this.tabs.forceCloseOwnedTab(record.jobId, record.runId);
+      } catch {
+        // Cleanup/reconcile retains ownership metadata and retries safely.
+      }
+    }
+  }
+
   private async navigateAndReady(
     tabId: number,
     record: RunnerRecord,
@@ -280,9 +369,11 @@ export class JobRunner {
     signal: AbortSignal
   ): Promise<void> {
     this.throwIfAborted(signal);
+    this.touchProgress(record.runId);
     await this.storage.patchRunner(record.runId, { phase });
     await this.tabs.navigate(tabId, record.runId, url);
     await this.tabs.waitUntilReady(tabId, record.runId);
+    this.touchProgress(record.runId);
     await this.heartbeat(record, signal);
   }
 
@@ -366,10 +457,22 @@ export class JobRunner {
       );
     }
 
-    const progress: ProgressCounters = {};
+    const checkpoint = record.checkpoint ?? defaultCheckpoint();
+    const progress: ProgressCounters = {
+      stage: "running",
+      currentSource: null,
+      sourcesTotal: snapshot.sources.length,
+      sourcesDone: checkpoint.sourceIndex,
+      tasksTotal: snapshot.tasks.length,
+      tasksDone:
+        checkpoint.sourceIndex * snapshot.keywords.length +
+        checkpoint.keywordIndex,
+      postsScanned: 0,
+      postsMatched: 0
+    };
     let partial = false;
     let partialReason: string | undefined;
-    const checkpoint = record.checkpoint ?? defaultCheckpoint();
+    const crawledPostExternalIds = new Set<string>();
 
     for (
       let sourceIndex = checkpoint.sourceIndex;
@@ -452,8 +555,13 @@ export class JobRunner {
           keywordIndex,
           postIndex: 0
         };
+        const searchWasAlreadyUploaded =
+          sourceIndex === checkpoint.sourceIndex &&
+          keywordIndex === checkpoint.keywordIndex &&
+          (checkpoint.phase === "search_uploaded" ||
+            checkpoint.phase === "comments_uploaded");
         await this.storage.patchRunner(record.runId, { phase: "uploading" });
-        if (postsToUpload.length > 0) {
+        if (postsToUpload.length > 0 && !searchWasAlreadyUploaded) {
           await this.api.uploadContent({
             jobId: record.jobId,
             ...lease,
@@ -472,7 +580,7 @@ export class JobRunner {
           });
         }
         await this.storage.patchRunner(record.runId, {
-          checkpoint: searchCheckpoint
+          checkpoint: searchWasAlreadyUploaded ? checkpoint : searchCheckpoint
         });
 
         if (snapshot.crawlComments) {
@@ -488,6 +596,14 @@ export class JobRunner {
           ) {
             const post = postsForCommentCrawl[postIndex];
             if (!post) continue;
+            if (
+              !claimPostForCommentCrawl(
+                crawledPostExternalIds,
+                post.externalId
+              )
+            ) {
+              continue;
+            }
             await this.navigateAndReady(
               tabId,
               record,
@@ -509,8 +625,6 @@ export class JobRunner {
                 mutationWaitMs: snapshot.limits.mutationWaitMs
               }
             });
-            progress.commentsCollected =
-              (progress.commentsCollected ?? 0) + detail.comments.length;
             if (detail.coverageStatus !== "complete") {
               partial = true;
               partialReason ??=
@@ -558,8 +672,24 @@ export class JobRunner {
             postIndex: 0
           }
         });
+        progress.tasksDone = (progress.tasksDone ?? 0) + 1;
+        progress.currentSource = source.name;
+        await this.api.event({
+          jobId: record.jobId,
+          ...lease,
+          taskId: task.id,
+          level: "info",
+          type: "task.completed",
+          payload: {
+            sourceExternalId: source.externalId,
+            keyword: keyword.value,
+            postsMatched: postsForCommentCrawl.length
+          },
+          progress
+        });
+        await this.heartbeat(record, signal);
       }
-      progress.groupsProcessed = (progress.groupsProcessed ?? 0) + 1;
+      progress.sourcesDone = (progress.sourcesDone ?? 0) + 1;
       await this.storage.patchRunner(record.runId, {
         checkpoint: {
           phase: "comments_uploaded",
@@ -657,7 +787,8 @@ export class JobRunner {
   public async cancel(jobId?: string): Promise<boolean> {
     const active = this.active;
     if (active && (!jobId || active.jobId === jobId)) {
-      active.controller.abort(
+      await this.abortActiveContentCommand(
+        active,
         new JobRunError(
           "CANCELLED_BY_USER",
           "Job cancelled by user.",
@@ -665,7 +796,13 @@ export class JobRunner {
           false
         )
       );
-      return true;
+      await active.promise;
+      const remaining = await this.storage.getRunner();
+      return (
+        !remaining ||
+        remaining.runId !== active.runId ||
+        remaining.tabId === undefined
+      );
     }
     const record = await this.storage.getRunner();
     if (!record || (jobId && record.jobId !== jobId)) return false;
@@ -679,11 +816,42 @@ export class JobRunner {
       )
     );
     await this.cleanup(record.jobId, record.runId);
-    return true;
+    const remaining = await this.storage.getRunner();
+    return (
+      !remaining ||
+      remaining.runId !== record.runId ||
+      remaining.tabId === undefined
+    );
   }
 
   public async reconcile(): Promise<void> {
-    if (this.active) return;
+    const active = this.active;
+    if (active) {
+      const record = await this.storage.getRunner();
+      if (!record || record.runId !== active.runId) return;
+      if (
+        !active.watchdogTriggered &&
+        isCrawlStalled(active.lastProgressAt)
+      ) {
+        active.watchdogTriggered = true;
+        await this.abortActiveContentCommand(
+          active,
+          new JobRunError(
+            "CRAWL_STALLED_60_SECONDS",
+            "The Facebook crawl made no observable progress for 60 seconds.",
+            "interrupted",
+            true
+          )
+        );
+        return;
+      }
+      try {
+        await this.heartbeat(record, active.controller.signal);
+      } catch (error) {
+        await this.abortActiveContentCommand(active, errorFromUnknown(error));
+      }
+      return;
+    }
     const record = await this.storage.getRunner();
     if (!record) {
       try {
@@ -745,8 +913,10 @@ export class JobRunner {
   }
 
   public async onTabRemoved(tabId: number): Promise<void> {
-    if (this.cleanupInProgress || !(await this.tabs.isOwnedTab(tabId))) return;
-    if (this.active) {
+    if (this.cleanupInProgress) return;
+    const record = await this.tabs.acknowledgeRemovedOwnedTab(tabId);
+    if (!record) return;
+    if (this.active?.runId === record.runId) {
       this.active.controller.abort(
         new JobRunError(
           "AUTOMATION_TAB_CLOSED",

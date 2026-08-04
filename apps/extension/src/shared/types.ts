@@ -52,6 +52,8 @@ export interface CrawlTask {
   id: string;
   sourceId: string | null;
   keywordId: string | null;
+  state: "pending" | "running" | "completed" | "failed";
+  checkpoint?: CrawlCheckpoint;
 }
 
 export interface CrawlLimits {
@@ -93,11 +95,13 @@ export interface RunnerRecord {
   startedAt: string;
   updatedAt: string;
   tabId?: number;
+  windowId?: number;
   leaseToken?: string;
   fencingToken?: number;
   leaseExpiresAt?: string;
   snapshot?: JobSnapshot;
   checkpoint?: CrawlCheckpoint;
+  lastProgressAt?: string;
   cancelRequested?: boolean;
   lastErrorCode?: string;
 }
@@ -112,6 +116,8 @@ export interface SafeAuthorDto {
   authorName: string | null;
   isAnonymous: boolean;
   authorKind: AuthorKind;
+  /** Low-cardinality, post-scoped visual bucket. Never a profile identifier. */
+  anonymousAvatarVariant?: number;
 }
 
 export type CoverageStatus = "complete" | "partial" | "unknown";
@@ -168,11 +174,19 @@ export interface CrawlPostResult {
 }
 
 export interface ProgressCounters {
-  groupsDiscovered?: number;
-  groupsProcessed?: number;
+  stage: string;
+  currentSource?: string | null;
+  sourcesTotal?: number;
+  sourcesDone?: number;
+  tasksTotal?: number;
+  tasksDone?: number;
   postsScanned?: number;
   postsMatched?: number;
-  commentsCollected?: number;
+  postsSaved?: number;
+  commentsSaved?: number;
+  sentimentTotal?: number;
+  sentimentDone?: number;
+  lastHeartbeatAt?: string | null;
 }
 
 export interface SourcesBatch {

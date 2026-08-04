@@ -2,6 +2,8 @@ export type SafeReadControlMode =
   | "groups"
   | "posts"
   | "comments"
+  | "post_filter_trigger"
+  | "post_filter_option"
   | "comment_filter_trigger"
   | "comment_filter_option";
 
@@ -9,7 +11,11 @@ const SAFE_LABEL_PATTERNS: Record<SafeReadControlMode, RegExp> = {
   groups: /^(see more|show more|xem them|hien thi them)$/u,
   posts: /^(see more|xem them)$/u,
   comments:
-    /^(view more comments|view previous comments|more comments|xem them binh luan|xem binh luan truoc|view more replies|view \d+ (?:more )?repl(?:y|ies)|xem them phan hoi|xem (?:them )?\d+ phan hoi)$/u,
+    /^(view more comments|view previous comments|view \d+ more comments|more comments|see more comments|xem them binh luan|xem them \d+ binh luan|xem (?:cac )?binh luan truoc|view more replies|view previous replies|view \d+ (?:more )?repl(?:y|ies)|see more replies|see \d+ (?:more )?repl(?:y|ies)|xem them phan hoi|xem (?:them )?\d+ phan hoi)$/u,
+  post_filter_trigger:
+    /^(most relevant|top posts|relevant posts|bai viet phu hop nhat|bai viet hang dau)$/u,
+  post_filter_option:
+    /^(recent posts|most recent|latest posts|newest posts|posts from recent|bai viet moi day|bai viet gan day(?: nhat)?|gan day nhat|moi nhat)$/u,
   comment_filter_trigger: /^(most relevant|phu hop nhat)$/u,
   comment_filter_option: /^(all comments|tat ca binh luan)$/u
 };
@@ -21,6 +27,7 @@ export function normalizeControlLabel(value: string): string {
   return value
     .normalize("NFD")
     .replace(/\p{Diacritic}/gu, "")
+    .replace(/[đĐ]/gu, "d")
     .toLocaleLowerCase("vi-VN")
     .replace(/\s+/gu, " ")
     .trim();

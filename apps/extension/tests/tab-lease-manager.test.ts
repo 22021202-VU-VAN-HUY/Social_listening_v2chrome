@@ -37,11 +37,23 @@ class FakeTabs implements TabsPort {
   private nextId = 10;
   private assignedRunId: string | null = null;
 
-  public async create(properties: { url: string; active: boolean }): Promise<ManagedTab> {
+  public async create(properties: {
+    url: string;
+    active: boolean;
+    isolatedWindow?: boolean;
+  }): Promise<ManagedTab> {
     this.createCalls += 1;
-    const tab = { id: this.nextId++, url: properties.url };
+    const tab = {
+      id: this.nextId++,
+      windowId: 500,
+      url: properties.url,
+      active: properties.active,
+      discarded: false,
+      frozen: false
+    };
     this.tabs.set(tab.id, tab);
-    expect(properties.active).toBe(false);
+    expect(properties.active).toBe(true);
+    expect(properties.isolatedWindow).toBe(true);
     return tab;
   }
 
@@ -57,7 +69,7 @@ class FakeTabs implements TabsPort {
   ): Promise<ManagedTab> {
     const tab = await this.get(tabId);
     if (properties.url) tab.url = properties.url;
-    expect(properties.active).not.toBe(true);
+    if (properties.active !== undefined) tab.active = properties.active;
     this.tabs.set(tabId, tab);
     return tab;
   }
@@ -93,7 +105,7 @@ function runnerRecord(): RunnerRecord {
 }
 
 describe("TabLeaseManager", () => {
-  it("serializes concurrent opens into exactly one inactive owned tab", async () => {
+  it("serializes concurrent opens into one active tab in an isolated runner window", async () => {
     const memory = new MemoryStorage();
     const storage = new ExtensionStorage(memory);
     const fakeTabs = new FakeTabs();
@@ -116,6 +128,37 @@ describe("TabLeaseManager", () => {
     const tab = await fakeTabs.get(ids[0] as number);
     expect(tab.url).toContain("https://www.facebook.com/");
     expect(tab.url).toContain("__listening_social_run=run-12345678");
+  });
+
+  it("replaces a throttled or frozen runner tab with a fresh isolated active tab", async () => {
+    const memory = new MemoryStorage();
+    const storage = new ExtensionStorage(memory);
+    const fakeTabs = new FakeTabs();
+    const manager = new TabLeaseManager(
+      storage,
+      fakeTabs,
+      (runId) => `chrome-extension://test/runner.html#run=${runId}`
+    );
+    const record = runnerRecord();
+    await storage.saveRunner(record);
+    const firstTabId = await manager.ensureOwnedTab(record.jobId, record.runId);
+    const firstTab = fakeTabs.tabs.get(firstTabId);
+    if (!firstTab) throw new Error("Expected first runner tab.");
+    firstTab.active = false;
+    firstTab.frozen = true;
+
+    const replacementTabId = await manager.ensureOwnedTab(
+      record.jobId,
+      record.runId
+    );
+
+    expect(replacementTabId).not.toBe(firstTabId);
+    expect(fakeTabs.removed).toContain(firstTabId);
+    expect(fakeTabs.tabs.get(replacementTabId)).toMatchObject({
+      active: true,
+      frozen: false
+    });
+    expect(fakeTabs.createCalls).toBe(2);
   });
 
   it("closes only the verified extension-owned tab and leaves user tabs alone", async () => {
@@ -170,7 +213,7 @@ describe("TabLeaseManager", () => {
       manager
     );
 
-    expect(await runner.cancel(record.jobId)).toBe(true);
+    expect(await runner.cancel(record.jobId)).toBe(false);
     expect(fakeTabs.removed).toEqual([]);
     expect(fakeTabs.tabs.has(77)).toBe(true);
     expect(fakeTabs.tabs.has(99)).toBe(true);
@@ -206,6 +249,48 @@ describe("TabLeaseManager", () => {
     await expect(
       manager.ensureOwnedTab("job-other-1234", "run-other-1234")
     ).rejects.toThrow(/another job/u);
+  });
+
+  it("treats an owned tab already closed by the user as cancelled and clears its stale reference", async () => {
+    const memory = new MemoryStorage();
+    const storage = new ExtensionStorage(memory);
+    const fakeTabs = new FakeTabs();
+    const manager = new TabLeaseManager(
+      storage,
+      fakeTabs,
+      (runId) => `chrome-extension://test/runner.html#run=${runId}`
+    );
+    const record = runnerRecord();
+    await storage.saveRunner(record);
+    const tabId = await manager.ensureOwnedTab(record.jobId, record.runId);
+
+    // Simulate Chrome's tab removal happening before the cancel request arrives.
+    fakeTabs.tabs.delete(tabId);
+
+    expect(await manager.cleanupOwnedTab(record.jobId, record.runId)).toBe(true);
+    expect((await storage.getRunner())?.tabId).toBeUndefined();
+    expect(fakeTabs.removed).toEqual([]);
+  });
+
+  it("acknowledges a user-closed owned tab only once", async () => {
+    const memory = new MemoryStorage();
+    const storage = new ExtensionStorage(memory);
+    const fakeTabs = new FakeTabs();
+    const manager = new TabLeaseManager(
+      storage,
+      fakeTabs,
+      (runId) => `chrome-extension://test/runner.html#run=${runId}`
+    );
+    const record = runnerRecord();
+    await storage.saveRunner(record);
+    const tabId = await manager.ensureOwnedTab(record.jobId, record.runId);
+    fakeTabs.tabs.delete(tabId);
+
+    expect(await manager.acknowledgeRemovedOwnedTab(tabId)).toMatchObject({
+      runId: record.runId
+    });
+    expect(await manager.acknowledgeRemovedOwnedTab(tabId)).toBeNull();
+    expect((await storage.getRunner())?.tabId).toBeUndefined();
   });
 
   it("recovers repeatedly when Facebook replaces the page and closes the message channel", async () => {
@@ -261,6 +346,39 @@ describe("TabLeaseManager", () => {
     expect(result).toEqual({ sources: [], coverageStatus: "unknown" });
     expect(fakeTabs.discoverAttempts).toBe(4);
     expect(fakeTabs.createCalls).toBe(1);
+  });
+
+  it("forwards cancellation to a long-running content command immediately", async () => {
+    class CancellationTabs extends FakeTabs {
+      public cancelMessages = 0;
+
+      public override async sendMessage(
+        tabId: number,
+        message: { type: string; runId?: string }
+      ): Promise<unknown> {
+        if (message.type === "CANCEL_RUN") {
+          this.cancelMessages += 1;
+        }
+        return super.sendMessage(tabId, message);
+      }
+    }
+
+    const memory = new MemoryStorage();
+    const storage = new ExtensionStorage(memory);
+    const fakeTabs = new CancellationTabs();
+    const manager = new TabLeaseManager(
+      storage,
+      fakeTabs,
+      (runId) => `chrome-extension://test/runner.html#run=${runId}`
+    );
+    const record = runnerRecord();
+    await storage.saveRunner(record);
+    const tabId = await manager.ensureOwnedTab(record.jobId, record.runId);
+    await manager.waitUntilReady(tabId, record.runId);
+
+    await manager.cancelActiveCommand(tabId, record.runId);
+
+    expect(fakeTabs.cancelMessages).toBe(1);
   });
 
   it("injects the read-only content runner when a background Facebook tab has no receiver", async () => {

@@ -22,6 +22,7 @@ const realAuthorSchema = z
     authorName: authorNameSchema,
     isAnonymous: z.literal(false),
     authorKind: z.literal("real"),
+    anonymousAvatarVariant: z.null().optional(),
   })
   .strict();
 
@@ -30,6 +31,7 @@ const anonymousAuthorSchema = z
     authorName: z.null(),
     isAnonymous: z.literal(true),
     authorKind: z.literal("anonymous"),
+    anonymousAvatarVariant: z.number().int().min(0).max(7).optional(),
   })
   .strict();
 
@@ -38,6 +40,7 @@ const unknownAuthorSchema = z
     authorName: z.null(),
     isAnonymous: z.literal(false),
     authorKind: z.literal("unknown"),
+    anonymousAvatarVariant: z.null().optional(),
   })
   .strict();
 
@@ -56,6 +59,7 @@ export const authorStorageSchema = z
     author_name: authorNameSchema.nullable(),
     is_anonymous: z.boolean(),
     author_kind: authorKindSchema,
+    anonymous_avatar_variant: z.number().int().min(0).max(7).nullable().optional(),
   })
   .strict()
   .superRefine((value, context) => {
@@ -73,6 +77,13 @@ export const authorStorageSchema = z
       context.addIssue({
         code: "custom",
         message: "is_anonymous is only valid for author_kind=anonymous",
+      });
+    }
+
+    if (value.anonymous_avatar_variant !== null && value.anonymous_avatar_variant !== undefined) {
+      context.addIssue({
+        code: "custom",
+        message: "Anonymous avatar variants are only valid for anonymous authors",
       });
     }
 

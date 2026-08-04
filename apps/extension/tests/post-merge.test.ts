@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { mergePostKeywordHits } from "../src/shared/post-merge";
+import {
+  claimPostForCommentCrawl,
+  mergePostKeywordHits
+} from "../src/shared/post-merge";
 import type { SafePostDto } from "../src/shared/types";
 
 function post(keywordId: string): SafePostDto {
@@ -38,5 +41,12 @@ describe("mergePostKeywordHits", () => {
     const first = post("11111111-1111-4111-8111-111111111111");
     const duplicate = post("11111111-1111-4111-8111-111111111111");
     expect(mergePostKeywordHits(first, duplicate).hasNewKeywordHit).toBe(false);
+  });
+
+  it("claims the same Facebook post for comment crawling only once per run", () => {
+    const crawled = new Set<string>();
+    expect(claimPostForCommentCrawl(crawled, "facebook-post-1")).toBe(true);
+    expect(claimPostForCommentCrawl(crawled, "facebook-post-1")).toBe(false);
+    expect(claimPostForCommentCrawl(crawled, "facebook-post-2")).toBe(true);
   });
 });
