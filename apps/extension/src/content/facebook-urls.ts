@@ -1,31 +1,9 @@
-import { canonicalFacebookUrl, isFacebookUrl } from "../shared/config";
+import { canonicalFacebookUrl } from "../shared/config";
+export { readRunMarker, RUN_MARKER_KEY, withRunMarker } from "./platform-urls";
 
 export const FACEBOOK_HOME_URL = "https://www.facebook.com/";
 export const FACEBOOK_JOINED_GROUPS_URL =
   "https://www.facebook.com/groups/joins/";
-
-export const RUN_MARKER_KEY = "__listening_social_run";
-
-export function withRunMarker(url: string, runId: string): string {
-  if (!isFacebookUrl(url)) {
-    throw new Error("Blocked non-Facebook navigation.");
-  }
-  const parsed = new URL(url);
-  parsed.hash = `${RUN_MARKER_KEY}=${encodeURIComponent(runId)}`;
-  return parsed.toString();
-}
-
-export function readRunMarker(url: string): string | null {
-  try {
-    const parsed = new URL(url);
-    const hash = parsed.hash.replace(/^#/u, "");
-    const params = new URLSearchParams(hash);
-    const value = params.get(RUN_MARKER_KEY);
-    return value && value.length <= 128 ? value : null;
-  } catch {
-    return null;
-  }
-}
 
 export function buildGroupSearchUrl(groupUrl: string, keyword: string): string {
   const canonical = canonicalGroupUrl(groupUrl);

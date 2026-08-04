@@ -52,11 +52,21 @@ function isFacebookHost(hostname: string): boolean {
   return normalized === "facebook.com" || normalized.endsWith(".facebook.com");
 }
 
+function isThreadsHost(hostname: string): boolean {
+  const normalized = hostname.toLocaleLowerCase("en-US");
+  return (
+    normalized === "threads.com" ||
+    normalized === "www.threads.com" ||
+    normalized === "threads.net" ||
+    normalized === "www.threads.net"
+  );
+}
+
 function facebookPathSegments(url: URL): string[] {
   return url.pathname.split("/").filter(Boolean);
 }
 
-function invalidFacebookUrl(code: string, message: string): never {
+function invalidContentUrl(code: string, message: string): never {
   throw new ApiError(400, code, message);
 }
 
@@ -65,13 +75,13 @@ export function sanitizeFacebookGroupUrl(rawUrl: string): string {
   try {
     canonicalUrl = sanitizeContentUrl(rawUrl);
   } catch {
-    return invalidFacebookUrl(
+    return invalidContentUrl(
       "INVALID_FACEBOOK_GROUP_URL",
       "Source URL must identify a Facebook group",
     );
   }
   if (!canonicalUrl) {
-    return invalidFacebookUrl(
+    return invalidContentUrl(
       "INVALID_FACEBOOK_GROUP_URL",
       "Source URL must identify a Facebook group",
     );
@@ -84,7 +94,7 @@ export function sanitizeFacebookGroupUrl(rawUrl: string): string {
     segments[0]?.toLocaleLowerCase("en-US") !== "groups" ||
     !segments[1]
   ) {
-    return invalidFacebookUrl(
+    return invalidContentUrl(
       "INVALID_FACEBOOK_GROUP_URL",
       "Source URL must use facebook.com/groups/{group}",
     );
@@ -104,13 +114,13 @@ export function sanitizeFacebookContentUrl(
   try {
     canonicalUrl = sanitizeContentUrl(rawUrl);
   } catch {
-    return invalidFacebookUrl(
+    return invalidContentUrl(
       "INVALID_FACEBOOK_CONTENT_URL",
       "Content URL must identify a Facebook group post or permalink",
     );
   }
   if (!canonicalUrl) {
-    return invalidFacebookUrl(
+    return invalidContentUrl(
       "INVALID_FACEBOOK_CONTENT_URL",
       "Content URL must identify a Facebook group post or permalink",
     );
@@ -126,7 +136,7 @@ export function sanitizeFacebookContentUrl(
     (entityKind !== "posts" && entityKind !== "permalink") ||
     !segments[3]
   ) {
-    return invalidFacebookUrl(
+    return invalidContentUrl(
       "INVALID_FACEBOOK_CONTENT_URL",
       "Content URL must use a Facebook group post or permalink path",
     );
@@ -160,6 +170,46 @@ export function facebookCommentExternalIdFromUrl(
     url.searchParams.get("reply_comment_id") ??
     url.searchParams.get("comment_id")
   );
+}
+
+export function sanitizeThreadsContentUrl(
+  rawUrl: string | null | undefined,
+): string | null {
+  if (rawUrl == null) return null;
+  let url: URL;
+  try {
+    url = new URL(rawUrl);
+  } catch {
+    return invalidContentUrl(
+      "INVALID_THREADS_CONTENT_URL",
+      "Content URL must identify a Threads post",
+    );
+  }
+  if (!isThreadsHost(url.hostname)) {
+    return invalidContentUrl(
+      "INVALID_THREADS_CONTENT_URL",
+      "Content URL must use threads.com",
+    );
+  }
+  const match = /\/(?:post|t)\/([A-Za-z0-9_-]{1,200})(?:\/|$)/u.exec(
+    url.pathname,
+  );
+  const shortcode = match?.[1];
+  if (!shortcode) {
+    return invalidContentUrl(
+      "INVALID_THREADS_CONTENT_URL",
+      "Content URL must use a Threads post or t path",
+    );
+  }
+  return `https://www.threads.com/t/${shortcode}/`;
+}
+
+export function threadsPostExternalIdFromUrl(rawUrl: string): string {
+  const canonical = sanitizeThreadsContentUrl(rawUrl);
+  if (!canonical) throw new Error("Threads content URL is required");
+  const match = /\/t\/([A-Za-z0-9_-]{1,200})\//u.exec(new URL(canonical).pathname);
+  if (!match?.[1]) throw new Error("Threads post shortcode is missing");
+  return match[1];
 }
 
 /**

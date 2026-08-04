@@ -4,7 +4,7 @@ import { SettingsClient } from "./settings-client";
 export const metadata: Metadata = {
   title: "Thiết lập",
   description:
-    "Kết nối extension, chọn Facebook Group, từ khóa và phạm vi lấy comment/reply.",
+    "Kết nối extension, cấu hình Facebook/Threads, từ khóa và phạm vi lấy post/comment/reply.",
 };
 
 export default function SettingsPage() {

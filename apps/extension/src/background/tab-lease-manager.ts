@@ -1,11 +1,11 @@
-import { isFacebookUrl } from "../shared/config";
 import { ExtensionStorage } from "../shared/storage";
 import type { ContentCommand, RunnerRecord } from "../shared/types";
 import {
-  FACEBOOK_HOME_URL,
+  isAllowedPlatformUrl,
+  platformHomeUrl,
   readRunMarker,
   withRunMarker
-} from "../content/facebook-urls";
+} from "../content/platform-urls";
 
 export interface ManagedTab {
   id?: number;
@@ -204,7 +204,7 @@ export class TabLeaseManager {
         if (existing) {
           if (!(await this.verifyOwnership(existing, record.tabId, runId))) {
             throw new Error(
-              "Cannot migrate an unverified Facebook tab into the isolated runner window."
+              "Cannot migrate an unverified platform tab into the isolated runner window."
             );
           }
           await this.tabs.remove(record.tabId);
@@ -228,11 +228,12 @@ export class TabLeaseManager {
         ...(placeholder.windowId !== undefined
           ? { windowId: placeholder.windowId }
           : {}),
-        phase: "opening_facebook"
+        phase: "opening_platform"
       });
       try {
+        const platform = record.snapshot?.platform ?? "facebook";
         await this.tabs.update(tabId, {
-          url: withRunMarker(FACEBOOK_HOME_URL, runId),
+          url: withRunMarker(platformHomeUrl(platform), runId),
           active: true,
           autoDiscardable: false
         });
@@ -252,8 +253,8 @@ export class TabLeaseManager {
   }
 
   public async navigate(tabId: number, runId: string, targetUrl: string): Promise<void> {
-    if (!isFacebookUrl(targetUrl)) {
-      throw new Error("Blocked navigation outside the Facebook allowlist.");
+    if (!isAllowedPlatformUrl(targetUrl)) {
+      throw new Error("Blocked navigation outside the platform allowlist.");
     }
     const record = await this.storage.getRunner();
     if (!record || record.runId !== runId || record.tabId !== tabId) {
@@ -290,7 +291,7 @@ export class TabLeaseManager {
           })) as ContentEnvelope;
         } catch {
           // Declarative injection can be delayed indefinitely in a throttled
-          // background Facebook tab. Inject the read-only runner explicitly;
+          // background platform tab. Inject the read-only runner explicitly;
           // the content script guards against duplicate registration.
           await this.tabs.injectContentScript(tabId);
           ping = (await this.tabs.sendMessage(tabId, {
@@ -303,7 +304,7 @@ export class TabLeaseManager {
             runId
           })) as ContentEnvelope;
           if (assigned?.ok) {
-            // Facebook can answer at document_idle and immediately replace the
+            // A platform SPA can answer at document_idle and immediately replace the
             // SPA page. Require a short stable interval before starting the
             // longer discovery/crawl command.
             await delay(500);
@@ -318,12 +319,12 @@ export class TabLeaseManager {
               if (confirmed?.ok) return;
             }
             lastError = new Error(
-              "Facebook replaced the page while the content channel was starting."
+              "The platform replaced the page while the content channel was starting."
             );
             continue;
           }
           lastError = new Error(
-            assigned?.error ?? "Facebook content ownership assignment failed."
+            assigned?.error ?? "Platform content ownership assignment failed."
           );
         }
       } catch (error) {
@@ -332,7 +333,7 @@ export class TabLeaseManager {
       await delay(250);
     }
     throw new Error(
-      `Facebook content script was not ready: ${
+      `Platform content script was not ready: ${
         lastError instanceof Error ? lastError.message : "timeout"
       }`
     );
@@ -347,7 +348,7 @@ export class TabLeaseManager {
           command
         )) as ContentEnvelope;
         if (!envelope || envelope.ok !== true) {
-          throw new Error(envelope?.error ?? "Facebook content command failed.");
+          throw new Error(envelope?.error ?? "Platform content command failed.");
         }
         return envelope.result as T;
       } catch (error) {
@@ -361,7 +362,7 @@ export class TabLeaseManager {
         if (!record?.runId || record.tabId !== tabId) {
           throw error;
         }
-        // Facebook occasionally replaces the page while a command is starting.
+        // Platform SPAs occasionally replace the page while a command is starting.
         // Re-establish the read-only content channel, then replay the
         // idempotent command a bounded number of times. Never open a second
         // tab for this recovery.
@@ -369,7 +370,7 @@ export class TabLeaseManager {
         await this.waitUntilReady(tabId, record.runId);
       }
     }
-    throw new Error("Facebook content command failed after channel recovery.");
+    throw new Error("Platform content command failed after channel recovery.");
   }
 
   public async cancelActiveCommand(tabId: number, runId: string): Promise<void> {
@@ -383,10 +384,10 @@ export class TabLeaseManager {
         runId
       }),
       5_000,
-      "Facebook content cancellation timed out."
+      "Platform content cancellation timed out."
     )) as ContentEnvelope;
     if (!envelope?.ok) {
-      throw new Error(envelope?.error ?? "Facebook content cancellation failed.");
+      throw new Error(envelope?.error ?? "Platform content cancellation failed.");
     }
   }
 
@@ -402,7 +403,7 @@ export class TabLeaseManager {
     if (readRunMarker(url) === runId) {
       return true;
     }
-    if (!isFacebookUrl(url)) {
+    if (!isAllowedPlatformUrl(url)) {
       return false;
     }
 

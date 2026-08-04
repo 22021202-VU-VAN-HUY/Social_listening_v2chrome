@@ -61,7 +61,7 @@ type CrawlSettings = {
   enabled: boolean;
 };
 
-const MIN_EXTENSION_VERSION = [0, 1, 6] as const;
+const MIN_EXTENSION_VERSION = [0, 2, 0] as const;
 
 function apiErrorCode(error: ApiError): string {
   const payload = asRecord(error.payload);
@@ -287,12 +287,15 @@ export function SettingsClient() {
   const [discoveryJobId, setDiscoveryJobId] = useState("");
 
   const loadSettings = useCallback(async () => {
+    const activePlatform = platform === "threads" ? "threads" : "facebook";
     const [extensionResult, groupsResult, keywordsResult, settingsResult] =
       await Promise.allSettled([
         apiRequest<unknown>("/extension/status"),
-        apiRequest<unknown>("/sources?platform=facebook"),
-        apiRequest<unknown>("/keywords"),
-        apiRequest<unknown>("/settings/facebook"),
+        activePlatform === "facebook"
+          ? apiRequest<unknown>("/sources?platform=facebook")
+          : Promise.resolve({ items: [] }),
+        apiRequest<unknown>(`/keywords?platform=${activePlatform}`),
+        apiRequest<unknown>(`/settings/${activePlatform}`),
       ]);
 
     const successCount = [
@@ -338,7 +341,7 @@ export function SettingsClient() {
         setSettings(normalizeSettings(settingsResult.value));
       }
     }
-  }, []);
+  }, [platform]);
 
   const refreshExtension = useCallback(async () => {
     try {
@@ -470,7 +473,8 @@ export function SettingsClient() {
     filteredGroups.every((group) => group.selected);
   const canCrawl =
     extension.state === "online" &&
-    selectedGroupIds.length > 0 &&
+    extension.compatible &&
+    (platform === "threads" || selectedGroupIds.length > 0) &&
     enabledKeywords.length > 0;
 
   function toggleGroup(id: string, selected: boolean) {
@@ -559,7 +563,7 @@ export function SettingsClient() {
       const response = await apiRequest<unknown>("/jobs/discover-sources", {
         method: "POST",
         body: JSON.stringify({
-          platform: "facebook",
+          platform: platform === "threads" ? "threads" : "facebook",
           deviceId: currentExtension.deviceId,
         }),
       });
@@ -693,8 +697,8 @@ export function SettingsClient() {
     setBusyAction("crawl");
     setFeedback(null);
     try {
-      await Promise.all([
-        apiRequest<unknown>("/settings/facebook", {
+      const activePlatform = platform === "threads" ? "threads" : "facebook";
+      const settingRequest = apiRequest<unknown>(`/settings/${activePlatform}`, {
           method: "PUT",
           body: JSON.stringify({
             lookbackPreset: lookbackPreset(settings.lookbackDays),
@@ -703,16 +707,19 @@ export function SettingsClient() {
             maxPostsPerSource: settings.maxPostsPerSource,
             maxCommentsPerPost: settings.maxCommentsPerPost,
             maxRuntimeMinutes: settings.maxRuntimeMinutes,
-            enabled: settings.enabled,
+            enabled: true,
           }),
-        }),
-        saveGroups(false),
-      ]);
+        });
+      await (activePlatform === "facebook"
+        ? Promise.all([settingRequest, saveGroups(false)])
+        : settingRequest);
       const response = await apiRequest<unknown>("/jobs/crawl", {
         method: "POST",
         body: JSON.stringify({
-          platform: "facebook",
-          sourceIds: selectedGroupIds,
+          platform: activePlatform,
+          ...(activePlatform === "facebook"
+            ? { sourceIds: selectedGroupIds }
+            : { deviceId: extension.deviceId }),
           keywordIds: enabledKeywords.map((keyword) => keyword.id),
           lookbackPreset: lookbackPreset(settings.lookbackDays),
         }),
@@ -723,11 +730,11 @@ export function SettingsClient() {
       setExtension((current) => ({ ...current, state: "crawling" }));
       setFeedback({
         type: "success",
-        text: `Job crawl đã được tạo và chỉ lấy bài trong ${
+        text: `Job ${activePlatform === "threads" ? "Threads" : "Facebook"} đã được tạo và chỉ lấy bài trong ${
           settings.lookbackDays === 0
             ? "hôm nay"
             : `${settings.lookbackDays} ngày gần đây`
-        }. Extension sẽ chỉ mở một tab Facebook và tự đóng khi hoàn tất.`,
+        }. Extension sẽ chỉ mở một tab ${activePlatform === "threads" ? "Threads" : "Facebook"} và tự đóng khi hoàn tất.`,
       });
     } catch (error) {
       if (
@@ -738,7 +745,7 @@ export function SettingsClient() {
         setExtension((current) => ({ ...current, state: "crawling" }));
         setFeedback({
           type: "info",
-          text: "Một job Facebook đã chạy rồi, hệ thống không tạo job trùng. Theo dõi tiến độ tại trang Jobs.",
+          text: "Extension đang chạy một job web khác, hệ thống không tạo job trùng. Theo dõi tiến độ tại trang Jobs.",
         });
         return;
       }
@@ -759,9 +766,9 @@ export function SettingsClient() {
           <span className="section-kicker">Control plane</span>
           <h2>Chọn đúng nguồn, nghe đúng tín hiệu</h2>
           <p>
-            Extension lọc từ khóa rồi lưu đầy đủ metadata/ngữ cảnh bài post
-            cùng bình luận và phản hồi. Hệ thống không tự đăng bài, bình luận,
-            like hay thực hiện tương tác Facebook.
+            Extension lọc từ khóa rồi lưu metadata/ngữ cảnh bài post cùng bình
+            luận và phản hồi trên Facebook hoặc Threads. Hệ thống chỉ đọc và
+            cuộn trang, không đăng bài, bình luận, like hay thực hiện tương tác.
           </p>
         </div>
         <div className="privacy-callout">
@@ -819,21 +826,24 @@ export function SettingsClient() {
                     ? "TikTok"
                     : "Threads"}
               </strong>
-              <small>{item === "facebook" ? "MVP đang hoạt động" : "Giai đoạn 2"}</small>
+              <small>{item === "tiktok" ? "Giai đoạn 2" : "MVP đang hoạt động"}</small>
             </span>
           </button>
         ))}
       </div>
 
-      {platform === "facebook" ? (
+      {platform !== "tiktok" ? (
         <div className="settings-layout" role="tabpanel">
           <section className="panel settings-section extension-section">
             <div className="settings-section-heading">
               <div className="section-number">01</div>
               <div>
                 <span className="section-kicker">Kết nối trình duyệt</span>
-                <h3>Facebook Extension</h3>
-                <p>Extension đang đăng nhập Facebook trên máy của bạn.</p>
+                <h3>{platform === "threads" ? "Threads Extension" : "Facebook Extension"}</h3>
+                <p>
+                  Extension dùng phiên đăng nhập {platform === "threads" ? "Threads" : "Facebook"}
+                  {" "}trên máy của bạn.
+                </p>
               </div>
               <span className={`connection-state state-${extension.state}`}>
                 <span aria-hidden="true" />
@@ -877,7 +887,8 @@ export function SettingsClient() {
             {extension.deviceId && !extension.compatible && (
               <p className="inline-warning">
                 Phiên bản extension hiện tại không tương thích API contract.
-                Hãy cập nhật trước khi crawl.
+                Hãy mở <code>chrome://extensions</code>, bấm Reload cho Social
+                Listening để dùng phiên bản 0.2.0 trở lên.
               </p>
             )}
 
@@ -890,16 +901,18 @@ export function SettingsClient() {
               >
                 {busyAction === "pair" ? "Đang tạo mã…" : "Tạo mã ghép extension"}
               </button>
-              <button
-                className="button button-primary"
-                type="button"
-                onClick={() => void syncGroups()}
-                disabled={busyAction === "sync"}
-              >
-                {busyAction === "sync"
-                  ? "Đang lấy group thật…"
-                  : "Lấy group đã tham gia"}
-              </button>
+              {platform === "facebook" && (
+                <button
+                  className="button button-primary"
+                  type="button"
+                  onClick={() => void syncGroups()}
+                  disabled={busyAction === "sync"}
+                >
+                  {busyAction === "sync"
+                    ? "Đang lấy group thật…"
+                    : "Lấy group đã tham gia"}
+                </button>
+              )}
             </div>
 
             {pairingCode && (
@@ -915,6 +928,7 @@ export function SettingsClient() {
             )}
           </section>
 
+          {platform === "facebook" && (
           <section className="panel settings-section groups-section">
             <div className="settings-section-heading">
               <div className="section-number">02</div>
@@ -1029,17 +1043,18 @@ export function SettingsClient() {
               </button>
             </div>
           </section>
+          )}
 
           <section className="panel settings-section keyword-section">
             <div className="settings-section-heading">
-              <div className="section-number">03</div>
+              <div className="section-number">{platform === "threads" ? "02" : "03"}</div>
               <div>
                 <span className="section-kicker">Lọc trước khi lưu</span>
                 <h3>Từ khóa theo dõi</h3>
                 <p>
-                  Từ khóa được đối chiếu trên bài post. Post khớp được lưu làm
-                  metadata/ngữ cảnh đầy đủ cho comment; comment/reply vẫn là
-                  dữ liệu listening chính.
+                  {platform === "threads"
+                    ? "Extension mở trang tìm kiếm Threads theo từng từ khóa rồi kiểm tra lại nội dung trên máy trước khi lưu bài và phản hồi."
+                    : "Từ khóa được đối chiếu trên bài post. Post khớp được lưu làm metadata/ngữ cảnh đầy đủ cho comment; comment/reply vẫn là dữ liệu listening chính."}
                 </p>
               </div>
               <span className="selection-counter">
@@ -1098,12 +1113,14 @@ export function SettingsClient() {
 
           <section className="panel settings-section crawl-section">
             <div className="settings-section-heading">
-              <div className="section-number">04</div>
+              <div className="section-number">{platform === "threads" ? "03" : "04"}</div>
               <div>
                 <span className="section-kicker">Phạm vi thu thập</span>
                 <h3>Thời gian bài post & bình luận</h3>
                 <p>
-                  Áp dụng cho lần lấy comment/reply tiếp theo trên các group đã chọn.
+                  {platform === "threads"
+                    ? "Áp dụng cho lần tìm bài và phản hồi công khai tiếp theo trên Threads."
+                    : "Áp dụng cho lần lấy comment/reply tiếp theo trên các group đã chọn."}
                 </p>
               </div>
             </div>
@@ -1143,20 +1160,19 @@ export function SettingsClient() {
             <div className="collection-policy" role="note">
               <span aria-hidden="true">C</span>
               <div>
-                <strong>Luôn thu thập comment và reply</strong>
+                <strong>{platform === "threads" ? "Thu thập bài và phản hồi công khai" : "Luôn thu thập comment và reply"}</strong>
                 <p>
-                  Với mỗi post khớp, hệ thống lưu source, URL, body, tên tác giả
-                  hoặc trạng thái ẩn danh, thời gian đăng, thời gian thu thập và
-                  keyword hits. Comment cũng chỉ lưu tên hiển thị hoặc ẩn danh,
-                  không lưu link hồ sơ cá nhân.
+                  {platform === "threads"
+                    ? "Collector chỉ cuộn trang tìm kiếm và trang bài viết; không bấm Like, Reply hay Follow. URL được chuẩn hóa để không lưu username. Kết quả phụ thuộc những gì Threads hiển thị cho tài khoản đang đăng nhập."
+                    : "Với mỗi post khớp, hệ thống lưu source, URL, body, tên tác giả hoặc trạng thái ẩn danh, thời gian đăng, thời gian thu thập và keyword hits. Comment cũng chỉ lưu tên hiển thị hoặc ẩn danh, không lưu link hồ sơ cá nhân."}
                 </p>
               </div>
             </div>
 
             <div className="crawl-summary">
               <div>
-                <span>Group</span>
-                <strong>{selectedGroupIds.length}</strong>
+                <span>{platform === "threads" ? "Nguồn" : "Group"}</span>
+                <strong>{platform === "threads" ? "Tìm kiếm công khai" : selectedGroupIds.length}</strong>
               </div>
               <div>
                 <span>Từ khóa bật</span>
@@ -1185,7 +1201,9 @@ export function SettingsClient() {
                 </p>
                 {!canCrawl && (
                   <span className="validation-message">
-                    Cần extension online, ít nhất 1 group và 1 từ khóa đang bật.
+                    {platform === "threads"
+                      ? "Cần extension 0.2.0+ online, đăng nhập Threads và ít nhất 1 từ khóa đang bật."
+                      : "Cần extension online, ít nhất 1 group và 1 từ khóa đang bật."}
                   </span>
                 )}
               </div>
@@ -1197,18 +1215,20 @@ export function SettingsClient() {
               >
                 {busyAction === "crawl"
                   ? "Đang tạo job…"
-                  : "Bắt đầu lấy comment"}
+                  : platform === "threads"
+                    ? "Bắt đầu tìm trên Threads"
+                    : "Bắt đầu lấy comment"}
               </button>
             </div>
           </section>
         </div>
       ) : (
         <section className="panel coming-soon" role="tabpanel">
-          <span className={`platform-monogram platform-monogram-${platform}`}>
-            {platform === "tiktok" ? "t" : "@"}
+          <span className="platform-monogram platform-monogram-tiktok">
+            t
           </span>
           <span className="section-kicker">Giai đoạn 2</span>
-          <h3>{platform === "tiktok" ? "TikTok" : "Threads"} chưa được bật</h3>
+          <h3>TikTok chưa được bật</h3>
           <p>
             Connector cần quyền API chính thức trước khi có thể thu thập dữ liệu.
             Khi được bật, comment/reply vẫn là dữ liệu listening chính; post
@@ -1221,7 +1241,7 @@ export function SettingsClient() {
             </div>
             <div>
               <span>Chế độ tìm kiếm</span>
-              <strong>{platform === "threads" ? "RECENT" : "Keyword search"}</strong>
+              <strong>Keyword search</strong>
             </div>
             <div>
               <span>Từ khóa dùng chung</span>

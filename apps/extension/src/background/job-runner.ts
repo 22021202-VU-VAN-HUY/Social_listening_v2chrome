@@ -4,6 +4,7 @@ import {
   buildGroupSearchUrl,
   FACEBOOK_JOINED_GROUPS_URL
 } from "../content/facebook-urls";
+import { buildThreadsSearchUrl } from "../content/threads-urls";
 import { ExtensionStorage } from "../shared/storage";
 import {
   claimPostForCommentCrawl,
@@ -95,7 +96,7 @@ function errorFromUnknown(error: unknown): JobRunError {
   }
   if (isTransientMessageChannelError(error)) {
     return new JobRunError(
-      "FACEBOOK_CHANNEL_INTERRUPTED",
+      "PLATFORM_CHANNEL_INTERRUPTED",
       error.message,
       "interrupted",
       true
@@ -398,7 +399,9 @@ export class JobRunner {
     });
     if (auth.state !== "authenticated") {
       throw new JobRunError(
-        auth.state === "login_required" ? "FACEBOOK_LOGIN_REQUIRED" : "FACEBOOK_CHALLENGE",
+        auth.state === "login_required"
+          ? `${snapshot.platform.toLocaleUpperCase("en-US")}_LOGIN_REQUIRED`
+          : `${snapshot.platform.toLocaleUpperCase("en-US")}_CHALLENGE`,
         auth.reason,
         "needs_login",
         false
@@ -406,6 +409,14 @@ export class JobRunner {
     }
 
     if (snapshot.kind === "discover_groups") {
+      if (snapshot.platform !== "facebook") {
+        throw new JobRunError(
+          "SOURCE_DISCOVERY_UNSUPPORTED",
+          "Source discovery is supported only for Facebook.",
+          "failed",
+          false
+        );
+      }
       await this.navigateAndReady(
         tabId,
         record,
@@ -508,7 +519,9 @@ export class JobRunner {
         await this.navigateAndReady(
           tabId,
           record,
-          buildGroupSearchUrl(source.url, keyword.value),
+          snapshot.platform === "threads"
+            ? buildThreadsSearchUrl(keyword.value)
+            : buildGroupSearchUrl(source.url, keyword.value),
           "searching_posts",
           signal
         );
@@ -838,7 +851,7 @@ export class JobRunner {
           active,
           new JobRunError(
             "CRAWL_STALLED_60_SECONDS",
-            "The Facebook crawl made no observable progress for 60 seconds.",
+            "The web crawl made no observable progress for 60 seconds.",
             "interrupted",
             true
           )

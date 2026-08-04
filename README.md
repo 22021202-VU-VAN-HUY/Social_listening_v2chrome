@@ -1,13 +1,13 @@
 # listening_socialmediav2
 
 Ứng dụng Social Listening cho chủ đề VinSmart Future. Bản MVP thu
-thập comment/reply Facebook qua Chrome Extension; bài post vẫn được lưu đủ
+thập post/comment/reply Facebook và Threads qua Chrome Extension; bài post được lưu đủ
 metadata để lọc keyword và làm ngữ cảnh. Web là control plane để cấu hình, chạy
 job, theo dõi tiến độ mỗi 5 giây, xem sentiment
 `positive | negative | neutral` và xuất báo cáo PDF.
 
-TikTok và Threads đã có màn hình cấu hình nhưng connector được khóa cho tới khi
-có API/quyền truy cập phù hợp.
+Threads Web Search hoạt động mà không cần Meta App hay access token. TikTok vẫn
+được khóa cho tới khi có kênh truy cập phù hợp.
 
 ## Thành phần
 
@@ -15,19 +15,20 @@ có API/quyền truy cập phù hợp.
 Web (vinext/React) ── REST ── API (Fastify) ── PostgreSQL
                              │                      │
 Chrome Extension ────────────┘                Sentiment worker
-  └─ tối đa 1 tab Facebook nền
+  └─ tối đa 1 tab Facebook hoặc Threads nền
 ```
 
 - `app/`: dashboard, jobs và settings.
 - `services/api/`: API, migration, seed, job lease/fencing và ingest.
 - `services/worker/`: phân tích lập trường của post và bình luận đối với VSF;
   reply được tính như bình luận và có thêm ngữ cảnh chuỗi cha.
-- `apps/extension/`: Chrome Manifest V3, Facebook DOM adapter và tab runner.
+- `apps/extension/`: Chrome Manifest V3, Facebook/Threads DOM adapter và tab runner.
 - `packages/contracts/`: Zod contract dùng chung.
 - `compose.yaml`: PostgreSQL, migrate, API, worker và web.
 - `PROJECT_PLAN.md`: thiết kế, flow, acceptance criteria và rủi ro đầy đủ.
 - `docs/DATA_DICTIONARY.md`: trường post/comment, timestamp, keyword và sentiment.
 - `docs/READ_ONLY_FACEBOOK.md`: allowlist thao tác đọc và các hành vi bị cấm.
+- `docs/THREADS_SETUP.md`: cài và chạy collector Threads Web không dùng Meta API.
 - `docs/AUTHOR_PRIVACY.md`: contract tên hiển thị/ẩn danh, không theo dõi profile.
 
 ## Chạy nhanh bằng Docker
@@ -114,18 +115,19 @@ npm run build --prefix apps/extension
 1. Mở `chrome://extensions`.
 2. Bật **Developer mode**.
 3. Chọn **Load unpacked** và trỏ tới `apps/extension/dist`.
-4. Tại `Settings > Facebook` trên web, tạo mã ghép.
+4. Tại `Settings > Facebook` hoặc `Settings > Threads` trên web, tạo mã ghép.
 5. Mở popup extension, nhập API URL và mã ghép.
 
 Sau mỗi lần build extension mới, bấm **Reload** tại `chrome://extensions`.
-Phiên bản hiện tại là `0.1.3` và API mặc định phải là
+Phiên bản hiện tại là `0.2.0` và API mặc định phải là
 `http://localhost:4000/api/v1`.
 
-Extension chỉ dùng phiên Facebook đang đăng nhập sẵn trong Chrome. Nó không đọc
+Extension chỉ dùng phiên Facebook/Threads đang đăng nhập sẵn trong Chrome. Nó không đọc
 hoặc gửi password, cookie hay session token về backend. Nó không nhập nội dung,
 không Like, không đăng bài và không gửi comment; chỉ click allowlist nút xem
 thêm/tải thêm comment và chọn `Tất cả bình luận`. Mỗi run sở hữu tối đa một tab Facebook nền, dùng lại tab
-đó cho các bước và đóng trong mọi trạng thái kết thúc. Nếu gặp login,
+đó cho các bước và đóng trong mọi trạng thái kết thúc. Threads chỉ cuộn và đọc,
+không bấm các nút tương tác. Nếu gặp login,
 checkpoint, 2FA hoặc CAPTCHA, run dừng an toàn thay vì tìm cách vượt qua.
 
 Crawler cố mở rộng toàn bộ comment/reply quan sát được trong giới hạn đã cấu

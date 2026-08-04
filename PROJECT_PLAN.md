@@ -1,12 +1,12 @@
 # Kế hoạch và trạng thái dự án `Social Listening`
 
-> Phiên bản tài liệu: 2.2 — AI stance + PDF export
+> Phiên bản tài liệu: 2.3 — Threads Web collector
 >
 > Ngày lập: 2026-07-30
 >
-> Cập nhật gần nhất: 2026-07-31
+> Cập nhật gần nhất: 2026-08-04
 >
-> Trạng thái: Facebook MVP đã triển khai; đang UAT và tiếp tục làm cứng Facebook DOM adapter
+> Trạng thái: Facebook MVP và Threads Web collector đã triển khai; đang UAT DOM thật
 >
 > Mốc mã nguồn đối chiếu: source đến `5079f08`; tài liệu nền tại `HEAD dd9a35e`
 >
@@ -16,9 +16,9 @@
 >
 > Chủ đề chuẩn: **VinSmart Future**
 >
-> Extension: `0.1.6`
+> Extension: `0.2.0`
 >
-> Phạm vi ưu tiên: Facebook end-to-end; TikTok và Threads chuẩn bị sẵn kiến trúc connector
+> Phạm vi ưu tiên: Facebook + Threads qua extension; TikTok chờ kênh truy cập phù hợp
 >
 > Múi giờ nghiệp vụ: `Asia/Ho_Chi_Minh`
 
@@ -32,19 +32,20 @@
 |---|---|---|
 | Web | Vinext `0.0.50`, React `19.2`, TypeScript `5.9`, Tailwind CSS `4.2`; ba route `/`, `/jobs`, `/settings` | Đã triển khai |
 | Giao diện | Dashboard đỏ `#EB0A2A`, đen và trắng theo nhận diện VinSmart Future; logo, favicon, feed kiểu Facebook | Đã triển khai |
-| Extension | Chrome Manifest V3, TypeScript, một tab Facebook nền, chỉ đọc | Đã triển khai `0.1.6` |
+| Extension | Chrome Manifest V3, TypeScript, một tab Facebook hoặc Threads nền, chỉ đọc | Đã triển khai `0.2.0` |
 | Group discovery | Đọc danh sách group đã tham gia, tổng kỳ vọng từ tiêu đề `(N)`, nested scroller, không giới hạn 10 group | Đã triển khai |
 | Crawl Facebook | Lọc post theo keyword/lookback; lấy post, comment, reply và metadata thời gian/keyword | Đã triển khai, tiếp tục UAT với DOM thật |
 | Reply hierarchy | Lưu `parent_comment_id`, reply nhiều bậc và `observed_order` theo thứ tự Facebook quan sát được | Đã triển khai qua migration `009_preserve_comment_order.sql` |
 | Danh tính tối thiểu | Chỉ lưu display name và `real|anonymous|unknown`; không lưu link/ID/handle/avatar người dùng | Đã triển khai |
 | API | Fastify 5 + TypeScript, Zod contract, ingest idempotent, job/lease, listening feed và sentiment endpoint | Đã triển khai |
-| Database | PostgreSQL 16, migrations `001`–`010` | Đã triển khai |
+| Database | PostgreSQL 16, migrations `001`–`013` | Đã triển khai |
 | AI sentiment | Phân tích targeted stance đối với VSF; tách text cần chấm khỏi ngữ cảnh bài post/reply; hiểu phủ định, mỉa mai và reply ngắn; chống gửi lại nội dung đã phân tích | Đã triển khai v2 |
 | Báo cáo PDF | Bản in sát dashboard: KPI, cơ cấu/tỷ lệ sắc thái, toàn bộ card bài post và cây comment/reply; lưu PDF qua hộp thoại in của trình duyệt | Đã triển khai |
 | Hạ tầng | Docker Compose: PostgreSQL, migrate, API, worker, web; Ollama là profile tùy chọn | Đã triển khai local |
 | Realtime | Web poll API mỗi 5 giây và fetch ngay khi tab được focus lại | Đã triển khai |
 | Kiểm thử | Web 3, Extension 62, API 33, Worker 12 — tổng 110 test pass bằng `npm run test:all` ngày 2026-07-31 | Đã xác minh |
-| TikTok / Threads | Settings và connector boundary | Phase 2, chưa có connector |
+| Threads | Web Search + post/reply DOM adapter, không cần Meta API/token | MVP đã triển khai, chờ smoke test live |
+| TikTok | Settings và connector boundary | Phase 2, chưa có connector |
 
 ### Những hạng mục đã hoàn thành theo mã nguồn
 
@@ -78,7 +79,7 @@
 
 - UAT thêm với Facebook DOM thực tế, đặc biệt các biến thể reply bị Facebook render phẳng và bài/comment lazy-load.
 - Hoàn thiện rate limit/log redaction/observability, healthcheck cho worker/web, runbook backup/restore và bộ đánh giá AI tiếng Việt.
-- TikTok và Threads chỉ triển khai khi có API/quyền truy cập hợp lệ.
+- Smoke test Threads thật sau khi reload extension 0.2.0; TikTok chỉ triển khai khi có kênh truy cập hợp lệ.
 - Production hosting chưa chốt; Docker local và GitHub hiện là nguồn mã chuẩn.
 
 ## 1. Tóm tắt dự án
@@ -122,7 +123,7 @@ Extension không chứa dashboard, không lưu dữ liệu nghiệp vụ dài h�
 | Chia sẻ contract | Zod schema + TypeScript types |
 | AI | `SentimentProvider` độc lập nhà cung cấp |
 | Cập nhật tiến độ MVP | Poll API mỗi 5 giây khi job đang hoạt động |
-| Phạm vi release đầu | Facebook hoàn chỉnh; TikTok/Threads có Settings nhưng để feature flag |
+| Phạm vi release đầu | Facebook và Threads Web qua extension; TikTok để feature flag |
 | Auth MVP | Một workspace, một tài khoản admin; schema sẵn sàng mở rộng nhiều người dùng |
 | Lịch chạy MVP | Chạy thủ công từ web; scheduler là phase sau |
 
@@ -181,15 +182,16 @@ Không thêm Redis hoặc `pg-boss` trong bản hiện tại. Sentiment worker c
 - Hủy job từ web.
 - Docker Compose cho web, API, worker và PostgreSQL.
 
-### 4.2. Phase 2 — TikTok và Threads
+### 4.2. Threads Web MVP và TikTok Phase 2
 
-- Kết nối bằng API chính thức và quyền truy cập hợp lệ.
-- Search nội dung theo keyword và khoảng ngày.
-- Lấy comment/reply trong phạm vi API cho phép.
+- Threads dùng phiên đăng nhập Chrome qua extension, không cần Meta App/token.
+- Search Threads theo keyword và khoảng ngày, match lại nội dung tại máy.
+- Lấy reply đang hiển thị trong conversation và ghi coverage trung thực.
 - Chuẩn hóa về cùng schema post/comment/sentiment.
 - Dùng chung dashboard, worker AI và cơ chế chống trùng.
+- TikTok tiếp tục khóa cho đến khi có connector phù hợp.
 
-Trong MVP, hai tab này vẫn cho phép lưu keyword và lookback, nhưng nút crawl bị khóa với thông báo rõ `Connector chưa được cấu hình`.
+Tab Threads cho phép tạo job thật qua extension; chỉ tab TikTok còn bị khóa.
 
 ### 4.3. Ngoài phạm vi MVP
 
@@ -347,11 +349,11 @@ Settings
 
 ### 7.4. `Settings > Threads`
 
-- Trạng thái Meta App/OAuth.
-- Keyword và lookback dùng cùng component.
+- Trạng thái extension/heartbeat và tương thích phiên bản 0.2.0+.
+- Keyword và lookback riêng cho platform Threads.
 - Search mode mặc định: `RECENT`.
-- Nút test connection.
-- Trong MVP: `Crawl ngay` bị disable bằng feature flag.
+- Nút tạo job Threads thật, mở tối đa một tab nền.
+- Thông báo rõ collector chỉ đọc và coverage phụ thuộc Threads Search.
 
 ### 7.5. Dashboard
 
@@ -624,7 +626,7 @@ stateDiagram-v2
 |---|---|---|---|
 | Facebook | Extension trong Chrome đã đăng nhập, chỉ nội dung được phép xem | MVP | Phê duyệt nội bộ về quyền/điều khoản và UAT bằng tài khoản test |
 | TikTok | API chính thức phù hợp use case; ưu tiên Research API nếu đủ điều kiện | Phase 2 | App/Research access được duyệt, credential và quota hợp lệ |
-| Threads | Threads API OAuth + keyword search/replies trong quyền được cấp | Phase 2 | Meta App, quyền liên quan và App Review hợp lệ |
+| Threads | Extension dùng Threads Web Search/replies trong phiên Chrome đã đăng nhập | MVP | Extension 0.2.0+, tài khoản Threads đăng nhập và UAT DOM thật |
 
 Mọi connector implement cùng interface:
 
@@ -637,9 +639,9 @@ interface SocialConnector {
 }
 ```
 
-Facebook adapter chạy phía extension; TikTok/Threads adapter chạy phía backend. Cả ba trả về DTO chuẩn hóa chung trước khi ghi database.
+Facebook và Threads adapter chạy phía extension; TikTok connector tương lai có thể chạy backend. Tất cả trả về DTO chuẩn hóa chung trước khi ghi database.
 
-TikTok cần feasibility spike riêng: Research API có keyword/comment nhưng không phải quyền truy cập thương mại đại trà và chỉ mở cho hồ sơ đủ điều kiện. Nếu dự án không đủ điều kiện, connector phải dùng một kênh được TikTok phê duyệt hoặc dừng ở import hợp lệ; không thay bằng scraping không được phép. Threads keyword search cũng chỉ bật sau khi Meta App/OAuth và các quyền thực tế đã pass.
+TikTok cần feasibility spike riêng: Research API có keyword/comment nhưng không phải quyền truy cập thương mại đại trà và chỉ mở cho hồ sơ đủ điều kiện. Nếu dự án không đủ điều kiện, connector phải dùng một kênh được TikTok phê duyệt hoặc dừng ở import hợp lệ.
 
 ## 11. Job model và trạng thái
 
@@ -916,7 +918,7 @@ Nếu không có cơ sở cho automation, thay Facebook connector bằng phươn
 - CSRF protection cho session-authenticated mutation.
 - Extension token ngắn quyền, rotate/revoke được.
 - Secret chỉ qua environment/secret manager.
-- Credential TikTok/Threads mã hóa at rest.
+- Credential TikTok mã hóa at rest; Threads Web không lưu credential/token.
 - CORS và `externally_connectable` allowlist chính xác origin.
 - Rate limit auth, pairing, job start và ingest.
 - Validate Zod ở mọi trust boundary.
@@ -1111,11 +1113,11 @@ Kết quả: `110/110` test pass, không có test fail/skipped/todo; web, contra
 | M7 | Dashboard, progress polling, cancel, errors | Hoàn thành | M3 + M5 + M6 | 4–6 ngày |
 | M8 | Hardening, privacy, fixture/E2E/UAT, runbook | Đang thực hiện | M7 | 5–7 ngày |
 | M9 | TikTok connector | Chưa bắt đầu — chờ API/quyền truy cập | M8 + API approval | 6–10 ngày |
-| M10 | Threads connector | Chưa bắt đầu — chờ API/quyền truy cập | M8 + API approval | 5–8 ngày |
+| M10 | Threads Web collector | Đã triển khai mã extension/API/UI; chờ smoke test live | M8 + extension 0.2.0 | 5–8 ngày |
 
 Facebook MVP dự kiến khoảng `41–58 developer-days`. Ba nền tảng dự kiến khoảng `52–76 developer-days`, chưa tính lead time App Review/Research access và thời gian sửa adapter khi UI nền tảng thay đổi.
 
-Trạng thái tổng hợp: phần mã Facebook MVP từ M1–M7 đã chạy và có 110 test tự động pass; M0/M8 còn các gate vận hành, compliance, UAT và runbook. M9–M10 chưa triển khai connector.
+Trạng thái tổng hợp: phần mã Facebook MVP từ M1–M7 đã chạy; M0/M8 còn các gate vận hành, compliance, UAT và runbook. M9 chưa triển khai; M10 đã hoàn thành mã và còn smoke test Threads thật.
 
 ### 21.1. Thứ tự build chi tiết
 
@@ -1144,7 +1146,7 @@ Trạng thái tổng hợp: phần mã Facebook MVP từ M1–M7 đã chạy và
 - Keyword CRUD/seed.
 - Lookback settings.
 - Source list/selection.
-- Feature flags TikTok/Threads.
+- Feature flag TikTok; Threads Web được bật qua extension 0.2.0+.
 
 #### M3 — Extension core
 
@@ -1227,7 +1229,7 @@ Trạng thái tổng hợp: phần mã Facebook MVP từ M1–M7 đã chạy và
 ### 22.3. Settings
 
 - Có đủ ba tab Facebook/TikTok/Threads.
-- Facebook active; TikTok/Threads thể hiện đúng trạng thái feature flag.
+- Facebook và Threads active; TikTok thể hiện đúng trạng thái feature flag.
 - Có sẵn đúng bốn keyword yêu cầu.
 - Keyword normalize và không lưu trùng.
 - Có đủ hôm nay/3/7/30 ngày.
@@ -1287,7 +1289,8 @@ Trạng thái tổng hợp: phần mã Facebook MVP từ M1–M7 đã chạy và
 | Duplicate do retry | Trung bình | Unique constraints, upsert, idempotency key |
 | Sentiment sai với mỉa mai/slang | Trung bình | Context, confidence, holdout tiếng Việt, human review |
 | AI cost tăng | Trung bình | Prefilter, cache, batch, budget guard |
-| TikTok/Threads không được cấp quyền | Cao | Feature flag, connector boundary, không giả lập chức năng |
+| TikTok không được cấp quyền | Cao | Feature flag, connector boundary, không giả lập chức năng |
+| Threads đổi DOM/search ranking | Cao | Adapter fixture, fail closed và coverage `partial/unknown` |
 | Máy/Chrome tắt giữa job | Trung bình | Lease TTL, resume checkpoint; UI hiển thị interrupted |
 
 ## 24. Observability và runbook
@@ -1365,7 +1368,7 @@ MVP chỉ được gọi là hoàn tất khi toàn bộ acceptance criteria ở 
 | AI provider/model | OpenAI-compatible qua env; model mặc định `gpt-5.6-terra` |
 | Cách gọi AI | Nút `Phân tích tất cả`; chỉ queue dữ liệu chưa phân tích |
 | Nơi deploy | Local/staging trước; production sau UAT |
-| TikTok/Threads | Feature flag off đến khi có quyền API |
+| TikTok / Threads | TikTok feature flag off; Threads Web active qua extension 0.2.0+ |
 
 ## 27. Tài liệu kỹ thuật tham chiếu
 

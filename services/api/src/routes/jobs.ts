@@ -163,13 +163,13 @@ async function findOnlineDevice(
     throw new ApiError(
       409,
       "EXTENSION_OFFLINE",
-      "A paired and recently active Facebook extension is required",
+      "A paired and recently active browser extension is required",
     );
   }
   return device;
 }
 
-async function ensureDeviceHasNoActiveFacebookJob(
+async function ensureDeviceHasNoActiveWebJob(
   transaction: Transaction,
   deviceId: string,
 ): Promise<void> {
@@ -178,13 +178,14 @@ async function ensureDeviceHasNoActiveFacebookJob(
       SELECT 1
       FROM crawl_jobs
       WHERE extension_device_id = $1
-        AND platform = 'facebook'
+        AND platform IN ('facebook', 'threads')
         AND status IN (
           'queued',
           'waiting_extension',
           'running',
           'processing_ai',
-          'interrupted'
+          'interrupted',
+          'needs_login'
         )
       LIMIT 1
     `,
@@ -193,7 +194,7 @@ async function ensureDeviceHasNoActiveFacebookJob(
   if (active.rowCount) {
     conflict(
       "DEVICE_ALREADY_BUSY",
-      "This extension device already owns an unfinished Facebook job",
+      "This extension device already owns an unfinished web collection job",
     );
   }
 }
@@ -202,6 +203,7 @@ async function createThreadsCrawlJob(
   transaction: Transaction,
   context: AppContext,
   input: {
+    deviceId?: string | undefined;
     sourceIds?: string[] | undefined;
     keywordIds?: string[] | undefined;
     lookbackPreset?: "today" | "3_days" | "7_days" | "30_days" | undefined;
@@ -215,13 +217,16 @@ async function createThreadsCrawlJob(
     );
   }
 
+  const device = await findOnlineDevice(transaction, context, input.deviceId);
+  await ensureDeviceHasNoActiveWebJob(transaction, device.id);
+
   const activeJob = await transaction.query(
     `
       SELECT 1
       FROM crawl_jobs
       WHERE workspace_id = $1
         AND platform = 'threads'
-        AND status IN ('queued', 'running', 'interrupted')
+        AND status IN ('queued', 'waiting_extension', 'running', 'interrupted', 'needs_login')
       LIMIT 1
       FOR UPDATE
     `,
@@ -237,6 +242,7 @@ async function createThreadsCrawlJob(
   const settingsResult = await transaction.query<{
     lookback_preset: "today" | "3_days" | "7_days" | "30_days";
     max_posts_per_source: number;
+    max_comments_per_post: number;
     max_runtime_minutes: number;
     enabled: boolean;
     timezone: string;
@@ -244,6 +250,7 @@ async function createThreadsCrawlJob(
     `
       SELECT settings.lookback_preset,
              settings.max_posts_per_source,
+             settings.max_comments_per_post,
              settings.max_runtime_minutes,
              settings.enabled,
              workspace.timezone
@@ -259,7 +266,7 @@ async function createThreadsCrawlJob(
     throw new ApiError(
       409,
       "THREADS_CONNECTOR_DISABLED",
-      "Enable the Threads connector in platform settings first",
+      "Enable the Threads web collector in platform settings first",
     );
   }
 
@@ -324,8 +331,17 @@ async function createThreadsCrawlJob(
   const lookbackPreset = input.lookbackPreset ?? settings.lookback_preset;
   const window = calculateWindow(lookbackPreset, createdAt, settings.timezone);
   const snapshot = {
-    connector: "threads-keyword-search-v1",
+    platform: "threads",
+    connector: "threads-web-v1",
     sourceIds: [source.id],
+    sources: [
+      {
+        id: source.id,
+        externalId: source.external_id,
+        name: source.name,
+        canonicalUrl: source.canonical_url,
+      },
+    ],
     keywordIds: keywordResult.rows.map((keyword) => keyword.id),
     keywords: keywordResult.rows.map((keyword) => ({
       id: keyword.id,
@@ -334,26 +350,22 @@ async function createThreadsCrawlJob(
       matchMode: keyword.match_mode,
     })),
     searchType: "RECENT",
-    searchMode: "KEYWORD",
-    requestedFields: [
-      "id",
-      "text",
-      "timestamp",
-      "permalink",
-      "is_reply",
-    ],
     windowStartUtc: window.start.toISOString(),
     windowEndUtc: window.end.toISOString(),
     timezone: settings.timezone,
     lookbackPreset,
-    crawlComments: false,
+    crawlComments: true,
     limits: {
       maxPostsPerSource: settings.max_posts_per_source,
+      maxCommentsPerPost: settings.max_comments_per_post,
+      maxScrollRounds: 20,
+      maxCommentExpandRounds: 30,
+      mutationWaitMs: 1_200,
       maxRuntimeMinutes: settings.max_runtime_minutes,
     },
   };
   const progress = {
-    stage: "queued",
+    stage: "waiting_extension",
     currentSource: source.name,
     sourcesTotal: 1,
     sourcesDone: 0,
@@ -363,8 +375,6 @@ async function createThreadsCrawlJob(
     postsMatched: 0,
     postsSaved: 0,
     commentsSaved: 0,
-    pagesFetched: 0,
-    apiCalls: 0,
     sentimentTotal: 0,
     sentimentDone: 0,
     lastHeartbeatAt: null,
@@ -372,14 +382,16 @@ async function createThreadsCrawlJob(
   const result = await transaction.query<JobRow>(
     `
       INSERT INTO crawl_jobs (
-        workspace_id, type, platform, status, settings_snapshot, progress,
-        created_at
+        workspace_id, extension_device_id, type, platform, status,
+        settings_snapshot, progress, created_at
       )
-      VALUES ($1, 'crawl_content', 'threads', 'queued', $2::jsonb, $3::jsonb, $4)
+      VALUES ($1, $2, 'crawl_content', 'threads', 'waiting_extension',
+              $3::jsonb, $4::jsonb, $5)
       RETURNING *
     `,
     [
       context.config.workspaceId,
+      device.id,
       JSON.stringify(snapshot),
       JSON.stringify(progress),
       createdAt,
@@ -397,7 +409,7 @@ async function createThreadsCrawlJob(
   }
   await appendJobEvent(transaction, row.id, "info", "job.created", {
     type: "crawl_content",
-    connector: "threads-keyword-search-v1",
+    connector: "threads-web-v1",
     tasksTotal: keywordResult.rows.length,
   });
   return serializeJob(row);
@@ -408,7 +420,7 @@ export function registerJobRoutes(app: FastifyInstance, context: AppContext): vo
     const input = parseWith(createDiscoverSourcesJobSchema, request.body);
     const job = await inTransaction(context.database, async (transaction) => {
       const device = await findOnlineDevice(transaction, context, input.deviceId);
-      await ensureDeviceHasNoActiveFacebookJob(transaction, device.id);
+      await ensureDeviceHasNoActiveWebJob(transaction, device.id);
       const progress = {
         stage: "waiting_extension",
         sourcesTotal: 0,
@@ -471,7 +483,7 @@ export function registerJobRoutes(app: FastifyInstance, context: AppContext): vo
         return createThreadsCrawlJob(transaction, context, input);
       }
       const device = await findOnlineDevice(transaction, context, input.deviceId);
-      await ensureDeviceHasNoActiveFacebookJob(transaction, device.id);
+      await ensureDeviceHasNoActiveWebJob(transaction, device.id);
 
       const settingsResult = await transaction.query<{
         lookback_preset: "today" | "3_days" | "7_days" | "30_days";
@@ -573,6 +585,7 @@ export function registerJobRoutes(app: FastifyInstance, context: AppContext): vo
       const lookbackPreset = input.lookbackPreset ?? settings.lookback_preset;
       const window = calculateWindow(lookbackPreset, createdAt, settings.timezone);
       const snapshot = {
+        platform: "facebook" as const,
         sources: sourceResult.rows.map((source) => ({
           id: source.id,
           externalId: source.external_id,

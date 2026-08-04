@@ -1,4 +1,5 @@
 import { canonicalGroupUrl } from "../content/facebook-urls";
+import { canonicalThreadsSourceUrl } from "../content/threads-urls";
 import type {
   CrawlCheckpoint,
   CrawlKeyword,
@@ -7,7 +8,8 @@ import type {
   CrawlTask,
   JobKind,
   JobSnapshot,
-  MatchMode
+  MatchMode,
+  WebPlatform
 } from "../shared/types";
 
 const DEFAULT_LIMITS: CrawlLimits = {
@@ -61,6 +63,14 @@ function inferKind(raw: Record<string, unknown>): JobKind {
     : "crawl_content";
 }
 
+function inferPlatform(raw: Record<string, unknown>): WebPlatform {
+  const platform = stringValue(raw["platform"])?.toLocaleLowerCase("en-US");
+  const connector = stringValue(raw["connector"])?.toLocaleLowerCase("en-US");
+  return platform === "threads" || connector?.startsWith("threads-")
+    ? "threads"
+    : "facebook";
+}
+
 function parseMatchMode(value: unknown, keyword: string): MatchMode {
   if (value === "whole_word" || value === "contains_phrase") {
     return value;
@@ -103,7 +113,7 @@ function parseKeywords(value: unknown): CrawlKeyword[] {
   return result;
 }
 
-function parseSources(value: unknown): CrawlSource[] {
+function parseSources(value: unknown, platform: WebPlatform): CrawlSource[] {
   if (!Array.isArray(value)) {
     return [];
   }
@@ -119,7 +129,11 @@ function parseSources(value: unknown): CrawlSource[] {
       stringValue(candidate["id"]);
     const rawUrl =
       stringValue(candidate["url"]) ?? stringValue(candidate["canonicalUrl"]);
-    const safeUrl = rawUrl ? canonicalGroupUrl(rawUrl) : null;
+    const safeUrl = rawUrl
+      ? platform === "threads"
+        ? canonicalThreadsSourceUrl(rawUrl)
+        : canonicalGroupUrl(rawUrl)
+      : null;
     if (!externalId || !safeUrl) {
       continue;
     }
@@ -203,10 +217,15 @@ export function normalizeJobSnapshot(value: unknown): JobSnapshot {
   const raw = record(value);
   const settings = record(raw["settings"]);
   const limitsRaw = record(raw["limits"]);
-  const sources = parseSources(raw["sources"] ?? raw["groups"] ?? raw["tasks"]);
+  const platform = inferPlatform(raw);
+  const sources = parseSources(
+    raw["sources"] ?? raw["groups"] ?? raw["tasks"],
+    platform
+  );
   const keywords = parseKeywords(raw["keywords"] ?? settings["keywords"]);
 
   return {
+    platform,
     kind: inferKind(raw),
     sources,
     keywords,

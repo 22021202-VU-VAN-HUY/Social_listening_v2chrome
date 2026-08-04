@@ -47,7 +47,7 @@ try {
         VALUES ($1, $2, '7_days', true, 50, 300, 500, 120, $3)
         ON CONFLICT (workspace_id, platform) DO NOTHING
       `,
-      [config.workspaceId, platform, platform === "facebook"],
+      [config.workspaceId, platform, platform !== "tiktok"],
     );
   }
 

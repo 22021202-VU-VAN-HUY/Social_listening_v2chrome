@@ -13,6 +13,8 @@ import {
   sanitizeContentUrl,
   sanitizeFacebookContentUrl,
   sanitizeFacebookGroupUrl,
+  sanitizeThreadsContentUrl,
+  threadsPostExternalIdFromUrl,
 } from "../src/privacy.js";
 
 const basePost = {
@@ -211,6 +213,26 @@ test("Facebook content URLs provide canonical post and comment identities", () =
     ),
     "comment-root",
   );
+});
+
+test("Threads URLs discard usernames, query parameters, and unsupported paths", () => {
+  assert.equal(
+    sanitizeThreadsContentUrl(
+      "https://www.threads.com/@huymemez/post/DExample_123?xmt=AQG-secret",
+    ),
+    "https://www.threads.com/t/DExample_123/",
+  );
+  assert.equal(
+    threadsPostExternalIdFromUrl("https://threads.net/t/DReply_456/"),
+    "DReply_456",
+  );
+  for (const invalid of [
+    "https://example.com/@huymemez/post/DExample_123",
+    "https://www.threads.com/@huymemez",
+    "https://www.threads.com/search?q=VinSmart",
+  ]) {
+    assert.throws(() => sanitizeThreadsContentUrl(invalid));
+  }
 });
 
 test("diagnostic metadata rejects identity-tracking keys recursively", () => {

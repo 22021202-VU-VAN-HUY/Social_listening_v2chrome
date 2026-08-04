@@ -394,6 +394,7 @@ export function registerExtensionRoutes(
       const device = await authenticateDevice(transaction, request, claim.deviceId);
       const jobResult = await transaction.query<{
         id: string;
+        platform: "facebook" | "threads";
         extension_device_id: string | null;
         status: string;
         cancel_requested: boolean;
@@ -401,12 +402,15 @@ export function registerExtensionRoutes(
       }>(
         `
           SELECT id,
+                 platform,
                  extension_device_id,
                  status,
                  cancel_requested,
                  settings_snapshot
           FROM crawl_jobs
-          WHERE id = $1 AND workspace_id = $2 AND platform = 'facebook'
+          WHERE id = $1
+            AND workspace_id = $2
+            AND platform IN ('facebook', 'threads')
           FOR UPDATE
         `,
         [jobId, device.workspaceId],
@@ -449,11 +453,11 @@ export function registerExtensionRoutes(
           )
           VALUES (
             $1,
-            'facebook',
             $2,
             $3,
+            $4,
             1,
-            now() + ($4 * interval '1 second'),
+            now() + ($5 * interval '1 second'),
             now()
           )
           ON CONFLICT (extension_device_id, platform)
@@ -470,6 +474,7 @@ export function registerExtensionRoutes(
         `,
         [
           device.id,
+          job.platform,
           jobId,
           hashSecret(leaseToken),
           context.config.leaseTtlSeconds,
@@ -478,8 +483,8 @@ export function registerExtensionRoutes(
       const slot = slotResult.rows[0];
       if (!slot) {
         conflict(
-          "FACEBOOK_SLOT_BUSY",
-          "The device already has another active Facebook crawl lease",
+          "PLATFORM_SLOT_BUSY",
+          "The device already has another active web crawl lease",
         );
       }
       await transaction.query(

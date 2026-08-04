@@ -1,4 +1,4 @@
-export const EXTENSION_VERSION = "0.1.6";
+export const EXTENSION_VERSION = "0.2.0";
 
 export type ExtensionPresenceStatus =
   | "offline"
@@ -10,7 +10,7 @@ export type RunnerPhase =
   | "idle"
   | "claiming"
   | "reserving_tab"
-  | "opening_facebook"
+  | "opening_platform"
   | "auth_check"
   | "discovering_groups"
   | "searching_posts"
@@ -24,6 +24,7 @@ export type RunnerPhase =
   | "failed";
 
 export type JobKind = "discover_groups" | "crawl_content";
+export type WebPlatform = "facebook" | "threads";
 export type MatchMode = "whole_word" | "contains_phrase";
 
 export interface StoredConnection {
@@ -66,6 +67,7 @@ export interface CrawlLimits {
 }
 
 export interface JobSnapshot {
+  platform: WebPlatform;
   kind: JobKind;
   sources: CrawlSource[];
   keywords: CrawlKeyword[];

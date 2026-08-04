@@ -9,7 +9,7 @@ import {
   postViewSchema,
 } from "@listening-social/contracts";
 
-test("crawl jobs allow the official Threads connector but not an unimplemented platform", () => {
+test("crawl jobs allow the Threads web collector but not an unimplemented platform", () => {
   assert.equal(
     createCrawlJobSchema.safeParse({ platform: "threads", lookbackPreset: "7_days" }).success,
     true,

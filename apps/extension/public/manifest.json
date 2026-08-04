@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Social Listening — VinSmart Future",
-  "description": "Thu thập group, bài viết, bình luận và cây phản hồi Facebook cho Social Listening.",
-  "version": "0.1.6",
+  "description": "Thu thập bài viết và phản hồi công khai từ Facebook, Threads cho Social Listening.",
+  "version": "0.2.0",
   "minimum_chrome_version": "120",
   "action": {
     "default_title": "Social Listening",
@@ -26,6 +26,10 @@
   "host_permissions": [
     "https://www.facebook.com/*",
     "https://web.facebook.com/*",
+    "https://www.threads.com/*",
+    "https://threads.com/*",
+    "https://www.threads.net/*",
+    "https://threads.net/*",
     "http://localhost/*",
     "http://127.0.0.1/*",
     "https://listening-socialmediav2.m-ilestyler431554.chatgpt.site/*"

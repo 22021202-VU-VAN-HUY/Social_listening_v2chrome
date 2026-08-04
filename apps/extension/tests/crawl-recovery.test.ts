@@ -8,6 +8,7 @@ import type { JobSnapshot } from "../src/shared/types";
 
 function snapshot(): JobSnapshot {
   return {
+    platform: "facebook",
     kind: "crawl_content",
     sources: [
       {

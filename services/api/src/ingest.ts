@@ -15,6 +15,8 @@ import {
   facebookPostExternalIdFromUrl,
   sanitizeFacebookContentUrl,
   sanitizeFacebookGroupUrl,
+  sanitizeThreadsContentUrl,
+  threadsPostExternalIdFromUrl,
 } from "./privacy.js";
 
 type SourceBatch = z.infer<typeof sourceBatchSchema>;
@@ -33,6 +35,7 @@ interface TrustedKeyword {
 }
 
 interface TrustedJobScope {
+  platform: "facebook" | "threads";
   sourceId: string;
   taskKeywordId: string;
   keywords: TrustedKeyword[];
@@ -53,12 +56,14 @@ async function trustedJobScope(
   taskId: string,
 ): Promise<TrustedJobScope> {
   const jobResult = await transaction.query<{
+    platform: "facebook" | "threads";
     settings_snapshot: unknown;
     task_source_id: string | null;
     task_keyword_id: string | null;
   }>(
     `
-      SELECT job.settings_snapshot,
+      SELECT job.platform,
+             job.settings_snapshot,
              task.source_id AS task_source_id,
              task.keyword_id AS task_keyword_id
       FROM crawl_jobs AS job
@@ -68,7 +73,7 @@ async function trustedJobScope(
       WHERE job.id = $2
         AND job.workspace_id = $1
         AND job.type = 'crawl_content'
-        AND job.platform = 'facebook'
+        AND job.platform IN ('facebook', 'threads')
     `,
     [workspaceId, jobId, taskId],
   );
@@ -77,7 +82,7 @@ async function trustedJobScope(
     throw new ApiError(
       400,
       "INVALID_CONTENT_TASK",
-      "Content batch taskId must identify a Facebook crawl task in this job",
+      "Content batch taskId must identify a web crawl task in this job",
     );
   }
 
@@ -133,10 +138,10 @@ async function trustedJobScope(
       SELECT keyword.id
       FROM keywords AS keyword
       WHERE keyword.workspace_id = $1
-        AND keyword.platform = 'facebook'
+        AND keyword.platform = $3
         AND keyword.id = ANY($2::uuid[])
     `,
-    [workspaceId, keywordIds],
+    [workspaceId, keywordIds, job.platform],
   );
   const allowedIds = new Set(allowedResult.rows.map((keyword) => keyword.id));
   const keywords = [...snapshotKeywords.values()].filter((keyword) =>
@@ -146,10 +151,11 @@ async function trustedJobScope(
     throw new ApiError(
       400,
       "INVALID_JOB_KEYWORD",
-      "The task keyword no longer belongs to this Facebook workspace",
+      `The task keyword no longer belongs to this ${job.platform} workspace`,
     );
   }
   return {
+    platform: job.platform,
     sourceId: job.task_source_id,
     taskKeywordId: job.task_keyword_id,
     keywords,
@@ -163,25 +169,26 @@ async function sourceIdForPost(
   workspaceId: string,
   post: ContentBatch["posts"][number],
   expectedSourceId: string,
+  platform: "facebook" | "threads",
 ): Promise<string> {
   const result = post.sourceId
     ? await transaction.query<{ id: string }>(
         `
           SELECT id
           FROM sources
-          WHERE id = $1 AND workspace_id = $2 AND platform = 'facebook'
+          WHERE id = $1 AND workspace_id = $2 AND platform = $3
         `,
-        [post.sourceId, workspaceId],
+        [post.sourceId, workspaceId, platform],
       )
     : await transaction.query<{ id: string }>(
         `
           SELECT id
           FROM sources
           WHERE workspace_id = $1
-            AND platform = 'facebook'
+            AND platform = $3
             AND external_id = $2
         `,
-        [workspaceId, post.sourceExternalId],
+        [workspaceId, post.sourceExternalId, platform],
       );
   const source = result.rows[0];
   if (!source) {
@@ -311,18 +318,26 @@ export async function ingestContentBatch(
       workspaceId,
       post,
       scope.sourceId,
+      scope.platform,
     );
     assertPostTimeInScope(post, scope);
     const author = authorForStorage(post.author);
-    const canonicalUrl = sanitizeFacebookContentUrl(post.url);
+    const canonicalUrl =
+      scope.platform === "threads"
+        ? sanitizeThreadsContentUrl(post.url)
+        : sanitizeFacebookContentUrl(post.url);
     if (!canonicalUrl) {
       throw new Error("Post URL is required");
     }
-    if (facebookPostExternalIdFromUrl(canonicalUrl) !== post.externalId) {
+    const urlExternalId =
+      scope.platform === "threads"
+        ? threadsPostExternalIdFromUrl(canonicalUrl)
+        : facebookPostExternalIdFromUrl(canonicalUrl);
+    if (urlExternalId !== post.externalId) {
       throw new ApiError(
         400,
         "POST_ID_URL_MISMATCH",
-        `Post ${post.externalId} does not match its canonical Facebook URL`,
+        `Post ${post.externalId} does not match its canonical ${scope.platform} URL`,
       );
     }
     const contentHash = calculateChecksum({
@@ -351,8 +366,8 @@ export async function ingestContentBatch(
           content_hash
         )
         VALUES (
-          $1, $2, $3, $3, 'facebook', $4, $5, $6, $7, $8, $9,
-          $10, $11, $12, $13, $14
+          $1, $2, $3, $3, $4, $5, $6, $7, $8, $9, $10,
+          $11, $12, $13, $14, $15
         )
         ON CONFLICT (workspace_id, platform, external_id)
         DO UPDATE SET
@@ -375,6 +390,7 @@ export async function ingestContentBatch(
         workspaceId,
         sourceId,
         jobId,
+        scope.platform,
         post.externalId,
         canonicalUrl,
         post.body,
@@ -443,7 +459,7 @@ export async function ingestContentBatch(
           SELECT id, body
           FROM posts
           WHERE workspace_id = $1
-            AND platform = 'facebook'
+            AND platform = $8
             AND external_id = $2
             AND source_id = $3
             AND last_seen_job_id = $7
@@ -470,6 +486,7 @@ export async function ingestContentBatch(
           new Date(scope.windowStart),
           new Date(scope.windowEnd),
           jobId,
+          scope.platform,
         ],
       );
       post = result.rows[0];
@@ -483,17 +500,24 @@ export async function ingestContentBatch(
     }
 
     const author = authorForStorage(comment.author);
-    const canonicalUrl = sanitizeFacebookContentUrl(comment.url);
+    const canonicalUrl =
+      scope.platform === "threads"
+        ? sanitizeThreadsContentUrl(comment.url)
+        : sanitizeFacebookContentUrl(comment.url);
     if (canonicalUrl) {
-      const urlPostExternalId = facebookPostExternalIdFromUrl(canonicalUrl);
       const urlCommentExternalId =
-        facebookCommentExternalIdFromUrl(canonicalUrl);
-      if (urlPostExternalId !== comment.postExternalId) {
-        throw new ApiError(
-          400,
-          "COMMENT_POST_ID_URL_MISMATCH",
-          `Comment ${comment.externalId} does not match its parent post URL`,
-        );
+        scope.platform === "threads"
+          ? threadsPostExternalIdFromUrl(canonicalUrl)
+          : facebookCommentExternalIdFromUrl(canonicalUrl);
+      if (scope.platform === "facebook") {
+        const urlPostExternalId = facebookPostExternalIdFromUrl(canonicalUrl);
+        if (urlPostExternalId !== comment.postExternalId) {
+          throw new ApiError(
+            400,
+            "COMMENT_POST_ID_URL_MISMATCH",
+            `Comment ${comment.externalId} does not match its parent post URL`,
+          );
+        }
       }
       if (
         urlCommentExternalId &&
@@ -502,7 +526,7 @@ export async function ingestContentBatch(
         throw new ApiError(
           400,
           "COMMENT_ID_URL_MISMATCH",
-          `Comment ${comment.externalId} does not match its canonical Facebook URL`,
+          `Comment ${comment.externalId} does not match its canonical ${scope.platform} URL`,
         );
       }
     }
@@ -533,8 +557,8 @@ export async function ingestContentBatch(
           content_hash
         )
         VALUES (
-          $1, $2, $3, $3, 'facebook', $4, $5, $6, $7, $8, $9,
-          $10, $11, $12, $13, $14, $15
+          $1, $2, $3, $3, $4, $5, $6, $7, $8, $9, $10,
+          $11, $12, $13, $14, $15, $16
         )
         ON CONFLICT (workspace_id, platform, external_id)
         DO UPDATE SET
@@ -558,6 +582,7 @@ export async function ingestContentBatch(
         workspaceId,
         post.id,
         jobId,
+        scope.platform,
         comment.externalId,
         canonicalUrl,
         comment.body,
@@ -600,11 +625,11 @@ export async function ingestContentBatch(
             SELECT id
             FROM comments
             WHERE workspace_id = $1
-              AND platform = 'facebook'
+              AND platform = $4
               AND external_id = $2
               AND post_id = $3
           `,
-          [workspaceId, comment.parentExternalId, comment.postId],
+          [workspaceId, comment.parentExternalId, comment.postId, scope.platform],
         );
     const parent = parentResult.rows[0];
     if (!parent) {

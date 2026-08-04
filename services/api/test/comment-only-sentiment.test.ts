@@ -152,12 +152,12 @@ test("new posts and comments stay pending until manual AI analysis", async () =>
   const commentCalls = calls.filter(({ sql }) =>
     sql.includes("INSERT INTO comments"),
   );
-  assert.deepEqual(commentCalls[0]?.parameters.slice(9, 12), [
+  assert.deepEqual(commentCalls[0]?.parameters.slice(10, 13), [
     "Nguyễn An",
     false,
     "real",
   ]);
-  assert.deepEqual(commentCalls[1]?.parameters.slice(9, 12), [
+  assert.deepEqual(commentCalls[1]?.parameters.slice(10, 13), [
     null,
     true,
     "anonymous",
