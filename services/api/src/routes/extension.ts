@@ -8,6 +8,7 @@ import {
   idSchema,
   idempotencyKeySchema,
   ingestBatchSchema,
+  knownPostsRequestSchema,
   pairExtensionSchema,
 } from "@listening-social/contracts";
 import type { FastifyInstance } from "fastify";
@@ -17,6 +18,7 @@ import { inTransaction, type Transaction } from "../db.js";
 import { appendJobEvent } from "../events.js";
 import { ApiError, conflict, notFound } from "../errors.js";
 import { ingestContentBatch, ingestSourceBatch } from "../ingest.js";
+import { findPreviouslySeenPostUrls } from "../known-posts.js";
 import { assertActiveLease } from "../lease.js";
 import { assertNoIdentityTrackingFields } from "../privacy.js";
 import {
@@ -302,7 +304,6 @@ export function registerExtensionRoutes(
                 last_heartbeat_at = now(),
                 updated_at = now()
             WHERE extension_device_id = $1
-              AND platform = 'facebook'
               AND job_id = $2
               AND fencing_token = $3
               AND lease_token_hash = $4
@@ -758,6 +759,44 @@ export function registerExtensionRoutes(
     });
   });
 
+  app.post("/api/v1/extension/jobs/:id/known-posts", async (request) => {
+    const { id: jobId } = parseWith(jobParamsSchema, request.params);
+    const input = parseWith(knownPostsRequestSchema, request.body);
+    return inTransaction(context.database, async (transaction) => {
+      const device = await authenticateDevice(transaction, request, input.deviceId);
+      await assertActiveLease(transaction, {
+        deviceId: device.id,
+        jobId,
+        leaseToken: input.leaseToken,
+        fencingToken: input.fencingToken,
+      });
+      const jobResult = await transaction.query<{
+        platform: "facebook" | "threads";
+      }>(
+        `
+          SELECT platform
+          FROM crawl_jobs
+          WHERE id = $1
+            AND workspace_id = $2
+            AND type = 'crawl_content'
+            AND platform IN ('facebook', 'threads')
+        `,
+        [jobId, device.workspaceId],
+      );
+      const job = jobResult.rows[0];
+      if (!job) return notFound("Crawl job not found");
+
+      return {
+        knownUrls: await findPreviouslySeenPostUrls(transaction, {
+          workspaceId: device.workspaceId,
+          jobId,
+          platform: job.platform,
+          urls: input.urls,
+        }),
+      };
+    });
+  });
+
   app.post("/api/v1/extension/jobs/:id/events", async (request) => {
     const { id: jobId } = parseWith(jobParamsSchema, request.params);
     const event = parseWith(extensionEventSchema, request.body);
@@ -906,6 +945,7 @@ export function registerExtensionRoutes(
                   THEN jsonb_set(progress, '{stage}', to_jsonb($2::text))
                 ELSE jsonb_set($4::jsonb, '{stage}', to_jsonb($2::text))
               END,
+              error_code = NULL,
               error_message = $5,
               completed_at = CASE
                 WHEN $2 IN ('completed', 'partial') THEN now()

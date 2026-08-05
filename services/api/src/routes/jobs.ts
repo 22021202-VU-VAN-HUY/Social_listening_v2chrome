@@ -14,7 +14,10 @@ import type { Transaction } from "../db.js";
 import { inTransaction } from "../db.js";
 import { appendJobEvent } from "../events.js";
 import { ApiError, conflict, notFound } from "../errors.js";
-import { calculateWindow } from "../time-window.js";
+import {
+  calculateDateRangeWindow,
+  calculateWindow,
+} from "../time-window.js";
 import { toIso } from "../serialize.js";
 import { parseWith } from "../validation.js";
 
@@ -207,6 +210,7 @@ async function createThreadsCrawlJob(
     sourceIds?: string[] | undefined;
     keywordIds?: string[] | undefined;
     lookbackPreset?: "today" | "3_days" | "7_days" | "30_days" | undefined;
+    dateRange?: { from: string; to: string } | undefined;
   },
 ): Promise<ReturnType<typeof serializeJob>> {
   if (input.sourceIds) {
@@ -329,7 +333,13 @@ async function createThreadsCrawlJob(
 
   const createdAt = new Date();
   const lookbackPreset = input.lookbackPreset ?? settings.lookback_preset;
-  const window = calculateWindow(lookbackPreset, createdAt, settings.timezone);
+  const window = input.dateRange
+    ? calculateDateRangeWindow(
+        input.dateRange.from,
+        input.dateRange.to,
+        settings.timezone,
+      )
+    : calculateWindow(lookbackPreset, createdAt, settings.timezone);
   const snapshot = {
     platform: "threads",
     connector: "threads-web-v1",
@@ -354,6 +364,8 @@ async function createThreadsCrawlJob(
     windowEndUtc: window.end.toISOString(),
     timezone: settings.timezone,
     lookbackPreset,
+    windowMode: input.dateRange ? "custom" : "preset",
+    dateRange: input.dateRange ?? null,
     crawlComments: true,
     limits: {
       maxPostsPerSource: settings.max_posts_per_source,
@@ -583,7 +595,13 @@ export function registerJobRoutes(app: FastifyInstance, context: AppContext): vo
 
       const createdAt = new Date();
       const lookbackPreset = input.lookbackPreset ?? settings.lookback_preset;
-      const window = calculateWindow(lookbackPreset, createdAt, settings.timezone);
+      const window = input.dateRange
+        ? calculateDateRangeWindow(
+            input.dateRange.from,
+            input.dateRange.to,
+            settings.timezone,
+          )
+        : calculateWindow(lookbackPreset, createdAt, settings.timezone);
       const snapshot = {
         platform: "facebook" as const,
         sources: sourceResult.rows.map((source) => ({
@@ -604,6 +622,8 @@ export function registerJobRoutes(app: FastifyInstance, context: AppContext): vo
         windowEndUtc: window.end.toISOString(),
         timezone: settings.timezone,
         lookbackPreset,
+        windowMode: input.dateRange ? "custom" : "preset",
+        dateRange: input.dateRange ?? null,
         crawlComments: true,
         limits: {
           maxSourcesPerJob: settings.max_sources_per_job,

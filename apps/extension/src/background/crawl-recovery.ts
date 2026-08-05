@@ -1,6 +1,9 @@
 import type { CrawlCheckpoint, JobSnapshot } from "../shared/types";
 
-export const CRAWL_STALL_TIMEOUT_MS = 60_000;
+// Background platform tabs can have their timers throttled heavily by Chrome.
+// Content scripts report liveness during every crawl round, so this timeout is
+// reserved for a genuinely unresponsive command rather than a slow DOM wait.
+export const CRAWL_STALL_TIMEOUT_MS = 180_000;
 
 export function isCrawlStalled(
   lastProgressAt: number,

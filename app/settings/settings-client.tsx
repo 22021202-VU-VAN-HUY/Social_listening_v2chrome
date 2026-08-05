@@ -25,6 +25,7 @@ import {
 
 type Platform = "facebook" | "tiktok" | "threads";
 type DataMode = "live" | "offline" | "degraded";
+type CollectionWindowMode = "preset" | "custom";
 
 type ExtensionStatus = {
   deviceId: string | null;
@@ -61,7 +62,36 @@ type CrawlSettings = {
   enabled: boolean;
 };
 
-const MIN_EXTENSION_VERSION = [0, 2, 0] as const;
+const MIN_EXTENSION_VERSION = [0, 2, 2] as const;
+const COLLECTION_TIMEZONE = "Asia/Ho_Chi_Minh";
+
+function dateInputValue(date: Date): string {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: COLLECTION_TIMEZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+  const value = Object.fromEntries(
+    parts
+      .filter((part) => part.type !== "literal")
+      .map((part) => [part.type, part.value]),
+  );
+  return `${value.year}-${value.month}-${value.day}`;
+}
+
+function defaultCustomDateRange(): { from: string; to: string } {
+  const now = new Date();
+  return {
+    from: dateInputValue(new Date(now.getTime() - 7 * 24 * 60 * 60 * 1_000)),
+    to: dateInputValue(now),
+  };
+}
+
+function formatCalendarDate(value: string): string {
+  const [year, month, day] = value.split("-");
+  return day && month && year ? `${day}/${month}/${year}` : value;
+}
 
 function apiErrorCode(error: ApiError): string {
   const payload = asRecord(error.payload);
@@ -275,6 +305,10 @@ export function SettingsClient() {
     maxRuntimeMinutes: 120,
     enabled: true,
   });
+  const [collectionWindowMode, setCollectionWindowMode] =
+    useState<CollectionWindowMode>("preset");
+  const [customDateFrom, setCustomDateFrom] = useState("");
+  const [customDateTo, setCustomDateTo] = useState("");
   const [groupQuery, setGroupQuery] = useState("");
   const [keywordInput, setKeywordInput] = useState("");
   const [busyAction, setBusyAction] = useState("");
@@ -471,11 +505,26 @@ export function SettingsClient() {
   const allVisibleSelected =
     filteredGroups.length > 0 &&
     filteredGroups.every((group) => group.selected);
+  const customDateRangeValid =
+    collectionWindowMode === "preset" ||
+    Boolean(
+      customDateFrom && customDateTo && customDateFrom <= customDateTo,
+    );
   const canCrawl =
     extension.state === "online" &&
     extension.compatible &&
     (platform === "threads" || selectedGroupIds.length > 0) &&
-    enabledKeywords.length > 0;
+    enabledKeywords.length > 0 &&
+    customDateRangeValid;
+
+  function selectCustomWindow() {
+    setCollectionWindowMode("custom");
+    if (!customDateFrom || !customDateTo) {
+      const range = defaultCustomDateRange();
+      setCustomDateFrom(customDateFrom || range.from);
+      setCustomDateTo(customDateTo || range.to);
+    }
+  }
 
   function toggleGroup(id: string, selected: boolean) {
     setGroups((current) =>
@@ -693,7 +742,43 @@ export function SettingsClient() {
     }
   }
 
+  async function deleteKeyword(keyword: Keyword) {
+    if (!window.confirm(`Xóa từ khóa “${keyword.value}”?`)) return;
+    const action = `delete-keyword:${keyword.id}`;
+    setBusyAction(action);
+    setFeedback(null);
+    try {
+      await apiRequest<unknown>(`/keywords/${encodeURIComponent(keyword.id)}`, {
+        method: "DELETE",
+      });
+      setKeywords((current) =>
+        current.filter((item) => item.id !== keyword.id),
+      );
+      setFeedback({
+        type: "success",
+        text: `Đã xóa từ khóa “${keyword.value}”.`,
+      });
+    } catch (error) {
+      setFeedback({
+        type: "error",
+        text:
+          error instanceof Error
+            ? error.message
+            : "Không thể xóa từ khóa.",
+      });
+    } finally {
+      setBusyAction("");
+    }
+  }
+
   async function startCrawl() {
+    if (!customDateRangeValid) {
+      setFeedback({
+        type: "error",
+        text: "Hãy chọn đủ Từ ngày và Đến ngày; Từ ngày không được sau Đến ngày.",
+      });
+      return;
+    }
     setBusyAction("crawl");
     setFeedback(null);
     try {
@@ -721,7 +806,14 @@ export function SettingsClient() {
             ? { sourceIds: selectedGroupIds }
             : { deviceId: extension.deviceId }),
           keywordIds: enabledKeywords.map((keyword) => keyword.id),
-          lookbackPreset: lookbackPreset(settings.lookbackDays),
+          ...(collectionWindowMode === "custom"
+            ? {
+                dateRange: {
+                  from: customDateFrom,
+                  to: customDateTo,
+                },
+              }
+            : { lookbackPreset: lookbackPreset(settings.lookbackDays) }),
         }),
       });
       const jobId = extractId(response);
@@ -731,9 +823,11 @@ export function SettingsClient() {
       setFeedback({
         type: "success",
         text: `Job ${activePlatform === "threads" ? "Threads" : "Facebook"} đã được tạo và chỉ lấy bài trong ${
-          settings.lookbackDays === 0
-            ? "hôm nay"
-            : `${settings.lookbackDays} ngày gần đây`
+          collectionWindowMode === "custom"
+            ? `khoảng ${formatCalendarDate(customDateFrom)}–${formatCalendarDate(customDateTo)}`
+            : settings.lookbackDays === 0
+              ? "hôm nay"
+              : `${settings.lookbackDays} ngày gần đây`
         }. Extension sẽ chỉ mở một tab ${activePlatform === "threads" ? "Threads" : "Facebook"} và tự đóng khi hoàn tất.`,
       });
     } catch (error) {
@@ -888,7 +982,7 @@ export function SettingsClient() {
               <p className="inline-warning">
                 Phiên bản extension hiện tại không tương thích API contract.
                 Hãy mở <code>chrome://extensions</code>, bấm Reload cho Social
-                Listening để dùng phiên bản 0.2.0 trở lên.
+                Listening để dùng phiên bản 0.2.2 trở lên.
               </p>
             )}
 
@@ -1074,19 +1168,34 @@ export function SettingsClient() {
                       ? "Khớp nguyên từ"
                       : "Khớp cụm từ"}
                   </span>
-                  <label className="mini-switch">
-                    <span className="sr-only">
-                      {keyword.enabled ? "Tắt" : "Bật"} từ khóa {keyword.value}
-                    </span>
-                    <input
-                      type="checkbox"
-                      checked={keyword.enabled}
-                      onChange={(event) =>
-                        void toggleKeyword(keyword, event.target.checked)
-                      }
-                    />
-                    <span aria-hidden="true" />
-                  </label>
+                  <div className="keyword-controls">
+                    <label className="mini-switch">
+                      <span className="sr-only">
+                        {keyword.enabled ? "Tắt" : "Bật"} từ khóa {keyword.value}
+                      </span>
+                      <input
+                        type="checkbox"
+                        checked={keyword.enabled}
+                        disabled={busyAction === `delete-keyword:${keyword.id}`}
+                        onChange={(event) =>
+                          void toggleKeyword(keyword, event.target.checked)
+                        }
+                      />
+                      <span aria-hidden="true" />
+                    </label>
+                    <button
+                      className="keyword-delete-button"
+                      type="button"
+                      aria-label={`Xóa từ khóa ${keyword.value}`}
+                      title="Xóa từ khóa"
+                      disabled={busyAction === `delete-keyword:${keyword.id}`}
+                      onClick={() => void deleteKeyword(keyword)}
+                    >
+                      <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M9 3h6l1 2h4v2H4V5h4l1-2Zm-2 6h10l-1 11H8L7 9Zm3 2v7h2v-7h-2Zm4 0v7h2v-7h-2Z" />
+                      </svg>
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>
@@ -1125,36 +1234,119 @@ export function SettingsClient() {
               </div>
             </div>
 
-            <fieldset className="lookback-options">
-              <legend>Xét bài post được đăng từ</legend>
-              {[
-                [0, "Hôm nay", "Từ 00:00 đến hiện tại"],
-                [3, "3 ngày", "Theo dõi ngắn hạn"],
-                [7, "7 ngày", "Khuyến nghị"],
-                [30, "30 ngày", "Khối lượng lớn"],
-              ].map(([days, label, description]) => (
-                <label
-                  className={
-                    settings.lookbackDays === days ? "is-selected" : ""
-                  }
-                  key={String(days)}
+            <fieldset className="collection-window-options">
+              <legend>Xét bài post trong khoảng</legend>
+              <div className="collection-window-grid">
+                <section
+                  className={`collection-window-card ${
+                    collectionWindowMode === "preset" ? "is-selected" : ""
+                  }`}
                 >
-                  <input
-                    type="radio"
-                    name="lookback"
-                    value={days}
-                    checked={settings.lookbackDays === days}
-                    onChange={() =>
-                      setSettings((current) => ({
-                        ...current,
-                        lookbackDays: days as CrawlSettings["lookbackDays"],
-                      }))
-                    }
-                  />
-                  <strong>{label}</strong>
-                  <small>{description}</small>
-                </label>
-              ))}
+                  <label className="collection-window-heading">
+                    <input
+                      type="radio"
+                      name="collection-window-mode"
+                      checked={collectionWindowMode === "preset"}
+                      onChange={() => setCollectionWindowMode("preset")}
+                    />
+                    <span>
+                      <strong>Khoảng nhanh</strong>
+                      <small>Chọn mốc thường dùng</small>
+                    </span>
+                  </label>
+                  <div className="quick-range-options">
+                    {[
+                      [0, "Hôm nay"],
+                      [3, "3 ngày"],
+                      [7, "7 ngày"],
+                      [30, "30 ngày"],
+                    ].map(([days, label]) => (
+                      <label
+                        className={
+                          collectionWindowMode === "preset" &&
+                          settings.lookbackDays === days
+                            ? "is-selected"
+                            : ""
+                        }
+                        key={String(days)}
+                      >
+                        <input
+                          type="radio"
+                          name="lookback"
+                          value={days}
+                          checked={
+                            collectionWindowMode === "preset" &&
+                            settings.lookbackDays === days
+                          }
+                          onChange={() => {
+                            setCollectionWindowMode("preset");
+                            setSettings((current) => ({
+                              ...current,
+                              lookbackDays:
+                                days as CrawlSettings["lookbackDays"],
+                            }));
+                          }}
+                        />
+                        <span>{label}</span>
+                      </label>
+                    ))}
+                  </div>
+                </section>
+
+                <section
+                  className={`collection-window-card ${
+                    collectionWindowMode === "custom" ? "is-selected" : ""
+                  }`}
+                >
+                  <label className="collection-window-heading">
+                    <input
+                      type="radio"
+                      name="collection-window-mode"
+                      checked={collectionWindowMode === "custom"}
+                      onChange={selectCustomWindow}
+                    />
+                    <span>
+                      <strong>Tùy chỉnh</strong>
+                      <small>Chọn từ ngày này đến ngày kia</small>
+                    </span>
+                  </label>
+                  <div className="custom-date-fields">
+                    <label>
+                      <span>Từ ngày</span>
+                      <input
+                        type="date"
+                        value={customDateFrom}
+                        max={customDateTo || undefined}
+                        onChange={(event) => {
+                          setCollectionWindowMode("custom");
+                          setCustomDateFrom(event.target.value);
+                        }}
+                      />
+                    </label>
+                    <label>
+                      <span>Đến ngày</span>
+                      <input
+                        type="date"
+                        value={customDateTo}
+                        min={customDateFrom || undefined}
+                        onChange={(event) => {
+                          setCollectionWindowMode("custom");
+                          setCustomDateTo(event.target.value);
+                        }}
+                      />
+                    </label>
+                  </div>
+                  {collectionWindowMode === "custom" &&
+                    !customDateRangeValid && (
+                      <span className="date-range-error">
+                        Chọn đủ hai ngày và bảo đảm ngày bắt đầu không sau ngày kết thúc.
+                      </span>
+                    )}
+                </section>
+              </div>
+              <p className="collection-window-note">
+                Có thể chọn khoảng qua nhiều tháng hoặc nhiều năm. Khoảng dài vẫn chịu giới hạn số bài và thời gian chạy đã cấu hình.
+              </p>
             </fieldset>
 
             <div className="collection-policy" role="note">
@@ -1181,9 +1373,13 @@ export function SettingsClient() {
               <div>
                 <span>Khoảng lấy</span>
                 <strong>
-                  {settings.lookbackDays === 0
-                    ? "Hôm nay"
-                    : `${settings.lookbackDays} ngày`}
+                  {collectionWindowMode === "custom"
+                    ? customDateRangeValid
+                      ? `${formatCalendarDate(customDateFrom)}–${formatCalendarDate(customDateTo)}`
+                      : "Chưa hợp lệ"
+                    : settings.lookbackDays === 0
+                      ? "Hôm nay"
+                      : `${settings.lookbackDays} ngày`}
                 </strong>
               </div>
               <div>
@@ -1201,9 +1397,11 @@ export function SettingsClient() {
                 </p>
                 {!canCrawl && (
                   <span className="validation-message">
-                    {platform === "threads"
-                      ? "Cần extension 0.2.0+ online, đăng nhập Threads và ít nhất 1 từ khóa đang bật."
-                      : "Cần extension online, ít nhất 1 group và 1 từ khóa đang bật."}
+                    {!customDateRangeValid
+                      ? "Khoảng ngày tùy chỉnh chưa hợp lệ."
+                      : platform === "threads"
+                        ? "Cần extension 0.2.2+ online, đăng nhập Threads và ít nhất 1 từ khóa đang bật."
+                        : "Cần extension online, ít nhất 1 group và 1 từ khóa đang bật."}
                   </span>
                 )}
               </div>

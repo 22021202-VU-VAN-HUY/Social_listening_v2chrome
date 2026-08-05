@@ -20,7 +20,6 @@ export async function assertActiveLease(
       SELECT lease_token_hash, fencing_token, lease_expires_at
       FROM crawler_slots
       WHERE extension_device_id = $1
-        AND platform = 'facebook'
         AND job_id = $2
       FOR UPDATE
     `,

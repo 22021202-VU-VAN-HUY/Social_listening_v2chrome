@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   claimPostForCommentCrawl,
+  excludePreviouslySeenPosts,
   mergePostKeywordHits
 } from "../src/shared/post-merge";
 import type { SafePostDto } from "../src/shared/types";
@@ -48,5 +49,23 @@ describe("mergePostKeywordHits", () => {
     expect(claimPostForCommentCrawl(crawled, "facebook-post-1")).toBe(true);
     expect(claimPostForCommentCrawl(crawled, "facebook-post-1")).toBe(false);
     expect(claimPostForCommentCrawl(crawled, "facebook-post-2")).toBe(true);
+  });
+
+  it("removes posts whose canonical link was seen in an earlier job", () => {
+    const first = post("11111111-1111-4111-8111-111111111111");
+    const second = {
+      ...post("22222222-2222-4222-8222-222222222222"),
+      externalId: "facebook-post-2",
+      url: "https://www.facebook.com/groups/facebook-group-1/posts/facebook-post-2/"
+    };
+    const result = excludePreviouslySeenPosts(
+      [first, second],
+      new Set([first.url])
+    );
+
+    expect(result.skipped).toBe(1);
+    expect(result.posts.map((item) => item.externalId)).toEqual([
+      "facebook-post-2"
+    ]);
   });
 });

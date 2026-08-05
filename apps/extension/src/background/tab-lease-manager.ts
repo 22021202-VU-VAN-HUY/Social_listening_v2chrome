@@ -23,7 +23,6 @@ export interface TabsPort {
   create(properties: {
     url: string;
     active: boolean;
-    isolatedWindow?: boolean;
   }): Promise<ManagedTab>;
   get(tabId: number): Promise<ManagedTab>;
   update(
@@ -35,6 +34,7 @@ export interface TabsPort {
     }
   ): Promise<ManagedTab | undefined>;
   remove(tabId: number): Promise<void>;
+  reload(tabId: number): Promise<void>;
   sendMessage(tabId: number, message: ContentCommand): Promise<unknown>;
   injectContentScript(tabId: number): Promise<void>;
 }
@@ -55,30 +55,32 @@ function chromeTabsPort(): TabsPort {
   };
   return {
     create: async (properties) => {
-      if (!properties.isolatedWindow) {
-        return toManaged(await chrome.tabs.create(properties));
-      }
-      const runnerWindow = await chrome.windows.create({
-        url: properties.url,
-        type: "popup",
-        focused: false,
-        width: 1_200,
-        height: 900
+      const lastFocused = await chrome.windows.getLastFocused({
+        populate: false,
+        windowTypes: ["normal"]
       });
-      const createdTab =
-        runnerWindow?.tabs?.[0] ??
-        (runnerWindow?.id !== undefined
+      const fallbackWindow =
+        lastFocused.id === undefined
           ? (
-              await chrome.tabs.query({
-                windowId: runnerWindow.id,
-                active: true
+              await chrome.windows.getAll({
+                populate: false,
+                windowTypes: ["normal"]
               })
             )[0]
-          : undefined);
-      if (!createdTab) {
-        throw new Error("Chrome did not return the isolated runner tab.");
+          : undefined;
+      const windowId = lastFocused.id ?? fallbackWindow?.id;
+      if (windowId === undefined) {
+        throw new Error(
+          "No normal Chrome window is open for the background crawl tab."
+        );
       }
-      return toManaged(createdTab);
+      return toManaged(
+        await chrome.tabs.create({
+          ...properties,
+          windowId,
+          active: false
+        })
+      );
     },
     get: async (tabId) => toManaged(await chrome.tabs.get(tabId)),
     update: async (tabId, properties) => {
@@ -86,6 +88,7 @@ function chromeTabsPort(): TabsPort {
       return tab ? toManaged(tab) : undefined;
     },
     remove: async (tabId) => chrome.tabs.remove(tabId),
+    reload: async (tabId) => chrome.tabs.reload(tabId),
     sendMessage: async (tabId, message) => chrome.tabs.sendMessage(tabId, message),
     injectContentScript: async (tabId) => {
       await chrome.scripting.executeScript({
@@ -195,7 +198,6 @@ export class TabLeaseManager {
           existing &&
           record.windowId !== undefined &&
           existing.windowId === record.windowId &&
-          existing.active !== false &&
           !existing.discarded &&
           !existing.frozen
         ) {
@@ -204,7 +206,7 @@ export class TabLeaseManager {
         if (existing) {
           if (!(await this.verifyOwnership(existing, record.tabId, runId))) {
             throw new Error(
-              "Cannot migrate an unverified platform tab into the isolated runner window."
+              "Cannot replace an unverified platform tab owned by the user."
             );
           }
           await this.tabs.remove(record.tabId);
@@ -215,8 +217,7 @@ export class TabLeaseManager {
       await this.storage.patchRunner(runId, { phase: "reserving_tab" });
       const placeholder = await this.tabs.create({
         url: this.runnerUrl(runId),
-        active: true,
-        isolatedWindow: true
+        active: false
       });
       if (placeholder.id === undefined) {
         throw new Error("Chrome did not return the runner tab ID.");
@@ -234,7 +235,7 @@ export class TabLeaseManager {
         const platform = record.snapshot?.platform ?? "facebook";
         await this.tabs.update(tabId, {
           url: withRunMarker(platformHomeUrl(platform), runId),
-          active: true,
+          active: false,
           autoDiscardable: false
         });
       } catch (error) {
@@ -262,7 +263,7 @@ export class TabLeaseManager {
     }
     await this.tabs.update(tabId, {
       url: withRunMarker(targetUrl, runId),
-      active: true,
+      active: false,
       autoDiscardable: false
     });
   }
@@ -277,11 +278,10 @@ export class TabLeaseManager {
     while (Date.now() < deadline) {
       try {
         const before = await this.tabs.get(tabId);
-        if (before.active === false || before.discarded || before.frozen) {
-          await this.tabs.update(tabId, {
-            active: true,
-            autoDiscardable: false
-          });
+        if (before.discarded || before.frozen) {
+          await this.tabs.reload(tabId);
+          await delay(250);
+          continue;
         }
         const beforeUrl = before.url ?? before.pendingUrl ?? "";
         let ping: ContentEnvelope | null = null;

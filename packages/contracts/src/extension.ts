@@ -96,6 +96,19 @@ const leaseProofShape = {
   fencingToken: z.number().int().positive(),
 };
 
+export const knownPostsRequestSchema = z
+  .object({
+    ...leaseProofShape,
+    urls: z.array(z.string().url().max(2_000)).min(1).max(500),
+  })
+  .strict();
+
+export const knownPostsResponseSchema = z
+  .object({
+    knownUrls: z.array(z.string().url().max(2_000)).max(500),
+  })
+  .strict();
+
 const batchBaseShape = {
   ...leaseProofShape,
   checksum: checksumSchema,

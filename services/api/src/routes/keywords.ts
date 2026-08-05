@@ -76,6 +76,12 @@ export function registerKeywordRoutes(
           workspace_id, platform, value, normalized_value, match_mode, active
         )
         VALUES ($1, $2, $3, $4, $5, $6)
+        ON CONFLICT (workspace_id, platform, normalized_value)
+        DO UPDATE SET
+          value = EXCLUDED.value,
+          match_mode = EXCLUDED.match_mode,
+          active = EXCLUDED.active,
+          updated_at = now()
         RETURNING id, platform, value, normalized_value, match_mode, active,
                   created_at, updated_at
       `,

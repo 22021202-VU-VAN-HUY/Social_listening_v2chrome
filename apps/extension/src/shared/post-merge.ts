@@ -14,6 +14,17 @@ export function claimPostForCommentCrawl(
   return true;
 }
 
+export function excludePreviouslySeenPosts(
+  posts: SafePostDto[],
+  knownUrls: ReadonlySet<string>
+): { posts: SafePostDto[]; skipped: number } {
+  const unseenPosts = posts.filter((post) => !knownUrls.has(post.url));
+  return {
+    posts: unseenPosts,
+    skipped: posts.length - unseenPosts.length
+  };
+}
+
 /**
  * A post can appear in multiple Facebook group-search result pages. Preserve
  * every server keyword ID while keeping one canonical parent-post record.

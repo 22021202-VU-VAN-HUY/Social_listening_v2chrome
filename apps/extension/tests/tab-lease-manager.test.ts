@@ -40,7 +40,6 @@ class FakeTabs implements TabsPort {
   public async create(properties: {
     url: string;
     active: boolean;
-    isolatedWindow?: boolean;
   }): Promise<ManagedTab> {
     this.createCalls += 1;
     const tab = {
@@ -52,8 +51,7 @@ class FakeTabs implements TabsPort {
       frozen: false
     };
     this.tabs.set(tab.id, tab);
-    expect(properties.active).toBe(true);
-    expect(properties.isolatedWindow).toBe(true);
+    expect(properties.active).toBe(false);
     return tab;
   }
 
@@ -77,6 +75,12 @@ class FakeTabs implements TabsPort {
   public async remove(tabId: number): Promise<void> {
     this.removed.push(tabId);
     this.tabs.delete(tabId);
+  }
+
+  public async reload(tabId: number): Promise<void> {
+    const tab = await this.get(tabId);
+    tab.discarded = false;
+    tab.frozen = false;
   }
 
   public async sendMessage(
@@ -105,7 +109,7 @@ function runnerRecord(): RunnerRecord {
 }
 
 describe("TabLeaseManager", () => {
-  it("serializes concurrent opens into one active tab in an isolated runner window", async () => {
+  it("serializes concurrent opens into one background tab in the existing browser window", async () => {
     const memory = new MemoryStorage();
     const storage = new ExtensionStorage(memory);
     const fakeTabs = new FakeTabs();
@@ -130,7 +134,7 @@ describe("TabLeaseManager", () => {
     expect(tab.url).toContain("__listening_social_run=run-12345678");
   });
 
-  it("replaces a throttled or frozen runner tab with a fresh isolated active tab", async () => {
+  it("replaces a frozen runner tab with a fresh background tab", async () => {
     const memory = new MemoryStorage();
     const storage = new ExtensionStorage(memory);
     const fakeTabs = new FakeTabs();
@@ -155,7 +159,7 @@ describe("TabLeaseManager", () => {
     expect(replacementTabId).not.toBe(firstTabId);
     expect(fakeTabs.removed).toContain(firstTabId);
     expect(fakeTabs.tabs.get(replacementTabId)).toMatchObject({
-      active: true,
+      active: false,
       frozen: false
     });
     expect(fakeTabs.createCalls).toBe(2);

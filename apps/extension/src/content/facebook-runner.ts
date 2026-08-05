@@ -19,6 +19,11 @@ import {
 
 const SESSION_RUN_KEY = "__listening_social_owned_run";
 
+// Facebook can keep a "view more" control alive or mutate unrelated DOM even
+// when no additional comments are exposed. Bound those unproductive rounds so
+// one post is returned as partial and the durable checkpoint can move forward.
+export const COMMENT_NO_GROWTH_ROUND_LIMIT = 6;
+
 interface CoverageAssessment {
   coverageStatus: CoverageStatus;
   partialReason?: string;
@@ -571,9 +576,7 @@ export class FacebookContentRunner {
         command.limits.mutationWaitMs,
         signal
       );
-      if (byId.size > before) {
-        this.progress(command.runId, "discover_groups", round + 1, byId.size);
-      }
+      this.progress(command.runId, "discover_groups", round + 1, byId.size);
       plateau = byId.size === before && !changed ? plateau + 1 : 0;
       if (plateau >= 2 && expectedCount === null) break;
     }
@@ -630,9 +633,7 @@ export class FacebookContentRunner {
         command.limits.mutationWaitMs,
         signal
       );
-      if (byId.size > before) {
-        this.progress(command.runId, "crawl_search", round + 1, byId.size);
-      }
+      this.progress(command.runId, "crawl_search", round + 1, byId.size);
       plateau = byId.size === before && !changed ? plateau + 1 : 0;
       if (plateau >= 2) break;
     }
@@ -662,6 +663,7 @@ export class FacebookContentRunner {
     this.progress(command.runId, "crawl_post", 0, 0);
     const byId = new Map<string, SafeCommentDto>();
     let plateau = 0;
+    let noGrowthRounds = 0;
     let hitLimit = false;
 
     await this.selectAllCommentsFilter(
@@ -691,15 +693,26 @@ export class FacebookContentRunner {
         command.limits.mutationWaitMs,
         signal
       );
+      this.progress(command.runId, "crawl_post", round + 1, byId.size);
       const changed = await this.scrollOnce(
         "comments",
         command.limits.mutationWaitMs,
         signal,
         false
       );
-      if (byId.size > before) {
-        this.progress(command.runId, "crawl_post", round + 1, byId.size);
+      // Collect once more after expansion/scroll so comments revealed by the
+      // final permitted round are not deferred to a round that never runs.
+      for (const comment of this.adapter().extractComments({
+        postExternalId: command.postExternalId,
+        maxComments: command.limits.maxCommentsPerPost
+      })) {
+        byId.set(comment.externalId, comment);
       }
+      if (byId.size >= command.limits.maxCommentsPerPost) {
+        hitLimit = true;
+      }
+      this.progress(command.runId, "crawl_post", round + 1, byId.size);
+      noGrowthRounds = byId.size === before ? noGrowthRounds + 1 : 0;
       plateau =
         byId.size === before &&
         expansion.clicked === 0 &&
@@ -707,7 +720,13 @@ export class FacebookContentRunner {
         !changed
           ? plateau + 1
           : 0;
-      if (plateau >= 2) break;
+      if (
+        hitLimit ||
+        plateau >= 2 ||
+        noGrowthRounds >= COMMENT_NO_GROWTH_ROUND_LIMIT
+      ) {
+        break;
+      }
     }
 
     const post = this.adapter().extractCurrentPost({

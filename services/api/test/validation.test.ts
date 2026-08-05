@@ -5,6 +5,7 @@ import {
   createCrawlJobSchema,
   extensionHeartbeatSchema,
   jobSnapshotSchema,
+  knownPostsRequestSchema,
   platformSettingsSchema,
   postViewSchema,
 } from "@listening-social/contracts";
@@ -15,6 +16,41 @@ test("crawl jobs allow the Threads web collector but not an unimplemented platfo
     true,
   );
   assert.equal(createCrawlJobSchema.safeParse({ platform: "tiktok" }).success, false);
+});
+
+test("crawl jobs accept a valid cross-year custom date range", () => {
+  assert.equal(
+    createCrawlJobSchema.safeParse({
+      platform: "threads",
+      dateRange: { from: "2024-12-15", to: "2026-01-10" },
+    }).success,
+    true,
+  );
+});
+
+test("crawl jobs reject invalid, reversed, or conflicting date ranges", () => {
+  assert.equal(
+    createCrawlJobSchema.safeParse({
+      platform: "threads",
+      dateRange: { from: "2026-02-30", to: "2026-03-01" },
+    }).success,
+    false,
+  );
+  assert.equal(
+    createCrawlJobSchema.safeParse({
+      platform: "threads",
+      dateRange: { from: "2026-02-01", to: "2025-12-31" },
+    }).success,
+    false,
+  );
+  assert.equal(
+    createCrawlJobSchema.safeParse({
+      platform: "threads",
+      lookbackPreset: "7_days",
+      dateRange: { from: "2026-01-01", to: "2026-01-31" },
+    }).success,
+    false,
+  );
 });
 
 test("settings contracts are strict and enforce server hard limits", () => {
@@ -57,6 +93,24 @@ test("heartbeat requires a complete lease proof tuple", () => {
       status: "running",
       jobId: "00000000-0000-4000-8000-000000000011",
     }).success,
+    false,
+  );
+});
+
+test("known-post lookup requires lease proof and bounded post URLs", () => {
+  const valid = {
+    deviceId: "00000000-0000-4000-8000-000000000010",
+    leaseToken: "l".repeat(64),
+    fencingToken: 1,
+    urls: ["https://www.threads.com/t/POST_1/"],
+  };
+  assert.equal(knownPostsRequestSchema.safeParse(valid).success, true);
+  assert.equal(
+    knownPostsRequestSchema.safeParse({ ...valid, leaseToken: undefined }).success,
+    false,
+  );
+  assert.equal(
+    knownPostsRequestSchema.safeParse({ ...valid, urls: [] }).success,
     false,
   );
 });

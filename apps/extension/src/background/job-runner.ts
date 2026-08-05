@@ -8,6 +8,7 @@ import { buildThreadsSearchUrl } from "../content/threads-urls";
 import { ExtensionStorage } from "../shared/storage";
 import {
   claimPostForCommentCrawl,
+  excludePreviouslySeenPosts,
   mergePostKeywordHits
 } from "../shared/post-merge";
 import type {
@@ -538,9 +539,18 @@ export class JobRunner {
             mutationWaitMs: snapshot.limits.mutationWaitMs
           }
         });
+        const knownPostUrls = await this.api.findKnownPostUrls({
+          jobId: record.jobId,
+          ...lease,
+          urls: searchResult.posts.map((post) => post.url)
+        });
+        const unseenResult = excludePreviouslySeenPosts(
+          searchResult.posts,
+          knownPostUrls
+        );
         const postsToUpload: SafePostDto[] = [];
         const postsForCommentCrawl: SafePostDto[] = [];
-        for (const post of searchResult.posts) {
+        for (const post of unseenResult.posts) {
           const existingPost = groupPosts.get(post.externalId);
           if (!existingPost) {
             groupPosts.set(post.externalId, post);
@@ -696,7 +706,8 @@ export class JobRunner {
           payload: {
             sourceExternalId: source.externalId,
             keyword: keyword.value,
-            postsMatched: postsForCommentCrawl.length
+            postsMatched: postsForCommentCrawl.length,
+            postsSkippedPreviouslySeen: unseenResult.skipped
           },
           progress
         });
@@ -850,8 +861,8 @@ export class JobRunner {
         await this.abortActiveContentCommand(
           active,
           new JobRunError(
-            "CRAWL_STALLED_60_SECONDS",
-            "The web crawl made no observable progress for 60 seconds.",
+            "CRAWL_STALLED_180_SECONDS",
+            "The web crawl made no observable progress for 180 seconds.",
             "interrupted",
             true
           )

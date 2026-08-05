@@ -32,15 +32,59 @@ function timezoneOffsetMilliseconds(date: Date, timezone: string): number {
   return representedAsUtc - date.getTime();
 }
 
-function startOfTodayInTimezone(now: Date, timezone: string): Date {
-  const local = zonedParts(now, timezone);
-  const midnightGuess = new Date(
-    Date.UTC(local.year ?? 1970, (local.month ?? 1) - 1, local.day ?? 1),
-  );
+function startOfLocalDateInTimezone(
+  year: number,
+  month: number,
+  day: number,
+  timezone: string,
+): Date {
+  const midnightGuess = new Date(Date.UTC(year, month - 1, day));
   const firstOffset = timezoneOffsetMilliseconds(midnightGuess, timezone);
   const firstPass = new Date(midnightGuess.getTime() - firstOffset);
   const correctedOffset = timezoneOffsetMilliseconds(firstPass, timezone);
   return new Date(midnightGuess.getTime() - correctedOffset);
+}
+
+function startOfTodayInTimezone(now: Date, timezone: string): Date {
+  const local = zonedParts(now, timezone);
+  return startOfLocalDateInTimezone(
+    local.year ?? 1970,
+    local.month ?? 1,
+    local.day ?? 1,
+    timezone,
+  );
+}
+
+function parseCalendarDate(value: string): [number, number, number] {
+  const [year, month, day] = value.split("-").map(Number);
+  return [year ?? 1970, month ?? 1, day ?? 1];
+}
+
+export function calculateDateRangeWindow(
+  from: string,
+  to: string,
+  timezone: string,
+): { start: Date; end: Date } {
+  const [fromYear, fromMonth, fromDay] = parseCalendarDate(from);
+  const [toYear, toMonth, toDay] = parseCalendarDate(to);
+  const dayAfterTo = new Date(Date.UTC(toYear, toMonth - 1, toDay + 1));
+
+  return {
+    start: startOfLocalDateInTimezone(
+      fromYear,
+      fromMonth,
+      fromDay,
+      timezone,
+    ),
+    end: new Date(
+      startOfLocalDateInTimezone(
+        dayAfterTo.getUTCFullYear(),
+        dayAfterTo.getUTCMonth() + 1,
+        dayAfterTo.getUTCDate(),
+        timezone,
+      ).getTime() - 1,
+    ),
+  };
 }
 
 export function calculateWindow(

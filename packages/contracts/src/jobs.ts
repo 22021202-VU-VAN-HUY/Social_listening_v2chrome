@@ -36,6 +36,30 @@ export const createDiscoverSourcesJobSchema = z
   })
   .strict();
 
+const calendarDateSchema = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/, "Date must use YYYY-MM-DD")
+  .refine((value) => {
+    const [year, month, day] = value.split("-").map(Number);
+    const date = new Date(Date.UTC(year ?? 0, (month ?? 1) - 1, day ?? 1));
+    return (
+      date.getUTCFullYear() === year &&
+      date.getUTCMonth() + 1 === month &&
+      date.getUTCDate() === day
+    );
+  }, "Date must be a valid calendar date");
+
+export const customDateRangeSchema = z
+  .object({
+    from: calendarDateSchema,
+    to: calendarDateSchema,
+  })
+  .strict()
+  .refine((range) => range.from <= range.to, {
+    message: "The start date must be before or equal to the end date",
+    path: ["to"],
+  });
+
 export const createCrawlJobSchema = z
   .object({
     platform: z.enum(["facebook", "threads"]).default("facebook"),
@@ -43,8 +67,13 @@ export const createCrawlJobSchema = z
     sourceIds: z.array(idSchema).min(1).max(50).optional(),
     keywordIds: z.array(idSchema).min(1).max(100).optional(),
     lookbackPreset: lookbackPresetSchema.optional(),
+    dateRange: customDateRangeSchema.optional(),
   })
-  .strict();
+  .strict()
+  .refine((input) => !(input.lookbackPreset && input.dateRange), {
+    message: "Choose either a lookback preset or a custom date range",
+    path: ["dateRange"],
+  });
 
 export const jobSnapshotSchema = z
   .object({

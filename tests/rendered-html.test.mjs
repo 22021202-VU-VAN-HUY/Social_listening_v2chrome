@@ -67,6 +67,10 @@ test("server-renders Facebook collection settings", async () => {
   assert.match(html, /Facebook Extension/i);
   assert.match(html, /Group đã tham gia/i);
   assert.match(html, /Từ khóa theo dõi/i);
+  assert.match(html, /Khoảng nhanh/i);
+  assert.match(html, /Tùy chỉnh/i);
+  assert.match(html, /Từ ngày/i);
+  assert.match(html, /Đến ngày/i);
   assert.match(html, /Không lưu link hồ sơ/i);
 });
 

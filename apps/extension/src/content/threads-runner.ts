@@ -158,9 +158,7 @@ export class ThreadsContentRunner {
         break;
       }
       const changed = await this.scrollOnce(command.limits.mutationWaitMs, signal);
-      if (byId.size > before) {
-        this.progress(command.runId, "crawl_search", round + 1, byId.size);
-      }
+      this.progress(command.runId, "crawl_search", round + 1, byId.size);
       plateau = byId.size === before && !changed ? plateau + 1 : 0;
       if (plateau >= 2) break;
     }
@@ -199,9 +197,7 @@ export class ThreadsContentRunner {
         break;
       }
       const changed = await this.scrollOnce(command.limits.mutationWaitMs, signal);
-      if (byId.size > before) {
-        this.progress(command.runId, "crawl_post", round + 1, byId.size);
-      }
+      this.progress(command.runId, "crawl_post", round + 1, byId.size);
       plateau = byId.size === before && !changed ? plateau + 1 : 0;
       if (plateau >= 2) break;
     }

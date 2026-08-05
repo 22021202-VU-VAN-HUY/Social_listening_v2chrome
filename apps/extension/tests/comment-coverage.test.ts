@@ -5,9 +5,11 @@ import {
   assessCommentCoverage,
   assessGroupListCoverage,
   assessPostSearchCoverage,
+  COMMENT_NO_GROWTH_ROUND_LIMIT,
   FacebookContentRunner,
   type CrawlProgressSignal
 } from "../src/content/facebook-runner";
+import type { CrawlPostResult } from "../src/shared/types";
 
 describe("comment coverage assessment", () => {
   it("emits a progress pulse when a background crawl command starts", async () => {
@@ -38,6 +40,55 @@ describe("comment coverage assessment", () => {
         itemsSeen: 0
       }
     ]);
+  });
+
+  it("reports liveness and leaves an unproductive comment control behind", async () => {
+    const dom = new JSDOM(
+      `<article data-sl-post>
+        <div data-sl-post-body>VSF post</div>
+        <a href="https://www.facebook.com/groups/1/posts/2/">Post</a>
+        <button type="button">View more comments</button>
+      </article>`,
+      { url: "https://www.facebook.com/groups/1/posts/2/" }
+    );
+    Object.defineProperty(dom.window, "scrollTo", {
+      configurable: true,
+      value: () => undefined
+    });
+    const progress: CrawlProgressSignal[] = [];
+    const runner = new FacebookContentRunner(
+      dom.window.document,
+      dom.window as unknown as Window,
+      (signal) => {
+        progress.push(signal);
+      }
+    );
+    await runner.handle({ type: "ASSIGN_RUN", runId: "run-stale-control" });
+    const result = (await runner.handle({
+      type: "CRAWL_POST",
+      runId: "run-stale-control",
+      sourceExternalId: "1",
+      postExternalId: "2",
+      keywords: [{ value: "VSF", matchMode: "whole_word" }],
+      windowStartUtc: null,
+      windowEndUtc: null,
+      limits: {
+        maxCommentsPerPost: 20,
+        maxCommentExpandRounds: 40,
+        mutationWaitMs: 1
+      }
+    })) as CrawlPostResult;
+
+    const crawlRounds = progress
+      .filter((signal) => signal.operation === "crawl_post")
+      .map((signal) => signal.round);
+    expect(crawlRounds).toContain(1);
+    expect(crawlRounds.filter((round) => round > 0).length).toBeGreaterThan(1);
+    expect(Math.max(...crawlRounds)).toBeLessThanOrEqual(
+      COMMENT_NO_GROWTH_ROUND_LIMIT
+    );
+    expect(result.coverageStatus).toBe("unknown");
+    expect(result.partialReason).toBe("comment_end_not_proven");
   });
 
   it("keeps a hard comment limit partial even when an end marker is visible", () => {

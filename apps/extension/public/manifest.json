@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Social Listening — VinSmart Future",
   "description": "Thu thập bài viết và phản hồi công khai từ Facebook, Threads cho Social Listening.",
-  "version": "0.2.0",
+  "version": "0.2.3",
   "minimum_chrome_version": "120",
   "action": {
     "default_title": "Social Listening",

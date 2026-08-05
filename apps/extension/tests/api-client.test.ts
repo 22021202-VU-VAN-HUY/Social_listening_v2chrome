@@ -88,6 +88,39 @@ afterEach(() => {
 });
 
 describe("BackendApiClient content batch", () => {
+  it("asks the API which post links were seen before this job", async () => {
+    const storage = new ExtensionStorage(new MemoryStorage());
+    await storage.saveConnection({
+      apiBaseUrl: "http://localhost:8787",
+      installationId: "installation-123456789",
+      deviceId: "device-123",
+      deviceToken: "x".repeat(64)
+    });
+    const knownUrl = parentPost().url;
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(JSON.stringify({ knownUrls: [knownUrl] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await new BackendApiClient(storage).findKnownPostUrls({
+      jobId: "job-123",
+      leaseToken: "l".repeat(64),
+      fencingToken: 7,
+      urls: [knownUrl, knownUrl]
+    });
+
+    expect(result).toEqual(new Set([knownUrl]));
+    const [url, init] = fetchMock.mock.calls[0] ?? [];
+    expect(String(url)).toContain("/jobs/job-123/known-posts");
+    const payload = JSON.parse(String((init as RequestInit).body)) as {
+      urls: string[];
+    };
+    expect(payload.urls).toEqual([knownUrl]);
+  });
+
   it("uploads full parent-post metadata and privacy-safe comments", async () => {
     const storage = new ExtensionStorage(new MemoryStorage());
     await storage.saveConnection({

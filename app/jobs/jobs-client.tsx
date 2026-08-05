@@ -74,6 +74,24 @@ function normalizeStatus(value: unknown): JobStatus {
   return "queued";
 }
 
+function humanizeJobMessage(value: string): string {
+  const messages: Record<string, string> = {
+    post_search_end_not_proven:
+      "Đã đọc các kết quả đang hiển thị nhưng Threads không cung cấp dấu hiệu xác nhận đã tới cuối danh sách.",
+    comment_end_not_proven:
+      "Đã đọc các phản hồi đang hiển thị nhưng chưa thể xác nhận đã tới cuối cuộc hội thoại.",
+    post_limit_reached:
+      "Đã đạt giới hạn số bài được cấu hình cho một nguồn.",
+    comment_limit_reached:
+      "Đã đạt giới hạn số bình luận/phản hồi được cấu hình cho một bài.",
+    recent_posts_filter_unconfirmed:
+      "Không xác nhận được bộ lọc bài viết mới đây của Facebook.",
+    "The extension stopped heartbeating before the crawl finished.":
+      "Extension mất heartbeat trước khi hoàn tất crawl.",
+  };
+  return messages[value] ?? value;
+}
+
 function normalizeJob(value: unknown): ListeningJob | null {
   const record = asRecord(value);
   const progress = asRecord(record.progress);
@@ -168,14 +186,16 @@ function normalizeJob(value: unknown): ListeningJob | null {
           record.completedAt ??
           record.completed_at,
       ) || null,
-    error:
-      asString(
+    error: (() => {
+      const message = asString(
         record.error ??
           record.errorMessage ??
           record.error_message ??
           record.lastError ??
           record.last_error,
-      ) || null,
+      );
+      return message ? humanizeJobMessage(message) : null;
+    })(),
   };
 }
 
@@ -430,15 +450,23 @@ export function JobsClient() {
             </div>
 
             {activeJob.error && (
-              <div className="job-error" role="alert">
-                <strong>Lỗi gần nhất</strong>
+              <div
+                className="job-error"
+                role={activeJob.status === "partial" ? "status" : "alert"}
+              >
+                <strong>
+                  {activeJob.status === "partial"
+                    ? "Giới hạn bao phủ"
+                    : "Lỗi gần nhất"}
+                </strong>
                 <p>{activeJob.error}</p>
               </div>
             )}
 
             <div className="job-focus-actions">
               <p>
-                Tab Facebook được khóa theo lease: tối đa một tab, tự đóng khi
+                Tab {activeJob.platform === "threads" ? "Threads" : "Facebook"}{" "}
+                được khóa theo lease: tối đa một tab, tự đóng khi
                 job hoàn tất, thất bại hoặc bị hủy.
               </p>
               <button

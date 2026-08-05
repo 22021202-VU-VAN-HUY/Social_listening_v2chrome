@@ -32,6 +32,53 @@ test("keyword removal is a soft disable so historical hits remain", async () => 
   assert.doesNotMatch(querySql, /DELETE FROM keywords/u);
 });
 
+test("adding a previously removed keyword reactivates its historical row", async () => {
+  let querySql = "";
+  const now = new Date("2026-08-04T00:00:00.000Z");
+  const database = {
+    async query(sql: string) {
+      querySql = sql;
+      return {
+        rows: [
+          {
+            id: "00000000-0000-4000-8000-000000000004",
+            platform: "threads",
+            value: "VinSmart Future",
+            normalized_value: "vinsmart future",
+            match_mode: "contains_phrase",
+            active: true,
+            created_at: now,
+            updated_at: now,
+          },
+        ],
+        rowCount: 1,
+      };
+    },
+  } as unknown as Database;
+  const app = Fastify({ logger: false });
+  registerKeywordRoutes(app, {
+    config: loadConfig({ NODE_ENV: "test" } as NodeJS.ProcessEnv),
+    database,
+  });
+
+  const response = await app.inject({
+    method: "POST",
+    url: "/api/v1/keywords",
+    payload: {
+      platform: "threads",
+      value: "VinSmart Future",
+      matchMode: "contains_phrase",
+      active: true,
+    },
+  });
+  await app.close();
+
+  assert.equal(response.statusCode, 201);
+  assert.match(querySql, /ON CONFLICT \(workspace_id, platform, normalized_value\)/u);
+  assert.match(querySql, /active = EXCLUDED\.active/u);
+  assert.equal(response.json().active, true);
+});
+
 test("keyword-hit migration freezes value and match mode history", async () => {
   const migration = await readFile(
     new URL(

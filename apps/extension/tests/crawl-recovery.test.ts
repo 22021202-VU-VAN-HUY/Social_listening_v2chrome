@@ -57,7 +57,7 @@ function snapshot(): JobSnapshot {
 }
 
 describe("crawl recovery", () => {
-  it("fires only after a full minute without observable progress", () => {
+  it("allows throttled background DOM waits before declaring a stall", () => {
     const startedAt = 1_000_000;
     expect(
       isCrawlStalled(startedAt, startedAt + CRAWL_STALL_TIMEOUT_MS - 1)

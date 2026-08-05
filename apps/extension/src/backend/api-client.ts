@@ -51,6 +51,13 @@ function requireNumber(value: unknown, name: string): number {
   return value;
 }
 
+function requireStringArray(value: unknown, name: string): string[] {
+  if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) {
+    throw new ApiError(`Invalid ${name} in API response.`, 502, "INVALID_RESPONSE", false);
+  }
+  return value;
+}
+
 async function sha256Json(value: unknown): Promise<string> {
   const encoded = new TextEncoder().encode(JSON.stringify(value));
   const digest = await crypto.subtle.digest("SHA-256", encoded);
@@ -324,6 +331,31 @@ export class BackendApiClient {
     };
     if (input.checkpoint) batch.checkpoint = input.checkpoint;
     await this.uploadBatch(input.jobId, batch, input.idempotencyKey, connection);
+  }
+
+  public async findKnownPostUrls(input: {
+    jobId: string;
+    leaseToken: string;
+    fencingToken: number;
+    urls: string[];
+  }): Promise<Set<string>> {
+    if (input.urls.length === 0) return new Set();
+    const connection = await this.requirePaired();
+    const raw = await this.request<Record<string, unknown>>(
+      connection.apiBaseUrl,
+      `/api/v1/extension/jobs/${encodeURIComponent(input.jobId)}/known-posts`,
+      {
+        method: "POST",
+        token: connection.deviceToken,
+        body: {
+          deviceId: connection.deviceId,
+          leaseToken: input.leaseToken,
+          fencingToken: input.fencingToken,
+          urls: [...new Set(input.urls)]
+        }
+      }
+    );
+    return new Set(requireStringArray(raw["knownUrls"], "knownUrls"));
   }
 
   private async uploadBatch(
