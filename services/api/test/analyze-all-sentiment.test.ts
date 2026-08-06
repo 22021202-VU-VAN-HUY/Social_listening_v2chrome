@@ -43,8 +43,15 @@ test("analyze-all queues posts, comments, and replies without a result", async (
   assert.match(querySql, /comment\.workspace_id = \$1/u);
   assert.match(querySql, /WITH RECURSIVE reply_ancestors/u);
   assert.match(querySql, /ancestry\.depth < 8/u);
+  assert.match(querySql, /reply_descendants/u);
+  assert.match(querySql, /'comment_with_replies'/u);
+  assert.match(querySql, /'targetCommentId'/u);
+  assert.match(querySql, /'relation', relation/u);
+  assert.match(querySql, /segment_order <= 60/u);
   assert.match(querySql, /left\(post\.body, 4000\) AS post_context/u);
-  assert.match(querySql, /reply_context\.conversation_context/u);
+  assert.match(querySql, /conversation_context\.conversation_context/u);
+  assert.match(querySql, /conversation_context\.root_comment_id/u);
+  assert.match(querySql, /conversation_group_id = EXCLUDED\.conversation_group_id/u);
   assert.match(querySql, /conversation_context = EXCLUDED\.conversation_context/u);
   assert.match(
     querySql,

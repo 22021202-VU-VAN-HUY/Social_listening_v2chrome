@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto";
 import type { SentimentInput } from "./schema.js";
 
-export const PROMPT_VERSION = "vsf-target-stance-v2";
-export const ANALYSIS_SCHEMA_VERSION = "sentiment-input-v2";
-export const NORMALIZATION_VERSION = "unicode-nfkc-v1";
+export const PROMPT_VERSION = "vsf-conversation-segment-workplace-v4";
+export const ANALYSIS_SCHEMA_VERSION = "sentiment-input-v4";
+export const NORMALIZATION_VERSION = "unicode-nfkc-topic-alias-v2";
 
 export function normalizeAnalysisText(value: string | null | undefined): string {
   return (value ?? "")

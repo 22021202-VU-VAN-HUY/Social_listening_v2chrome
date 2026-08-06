@@ -1,4 +1,4 @@
-export const EXTENSION_VERSION = "0.2.3";
+export const EXTENSION_VERSION = "0.2.5";
 
 export type ExtensionPresenceStatus =
   | "offline"

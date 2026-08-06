@@ -31,7 +31,7 @@ describe("HeuristicSentimentProvider", () => {
     assert.equal(result.label, "negative");
   });
 
-  it("does not inherit a positive label from the post context", async () => {
+  it("uses post context for relevance without inheriting its positive label", async () => {
     const result = await provider.analyze({
       entityType: "comment",
       entityId: "comment-neutral-1",
@@ -40,7 +40,7 @@ describe("HeuristicSentimentProvider", () => {
       topic: "Vinsmart Future",
     });
 
-    assert.equal(result.isRelevant, false);
+    assert.equal(result.isRelevant, true);
     assert.equal(result.label, "neutral");
   });
 
@@ -69,5 +69,86 @@ describe("HeuristicSentimentProvider", () => {
 
     assert.equal(result.isRelevant, true);
     assert.equal(result.label, "positive");
+  });
+
+  it("recognizes a Vietnamese phonetic spelling of VSF", async () => {
+    const result = await provider.analyze({
+      entityType: "comment",
+      entityId: "comment-phonetic-vsf",
+      text: "Vờ sờ phờ lần này làm quá tệ",
+      topic: "VinSmart Future",
+    });
+
+    assert.equal(result.isRelevant, true);
+    assert.equal(result.label, "negative");
+  });
+
+  it("recognizes separated VSF initials", async () => {
+    const result = await provider.analyze({
+      entityType: "post",
+      entityId: "post-separated-vsf",
+      text: "V.S.F có chương trình rất ý nghĩa",
+      topic: "VinSmart Future",
+    });
+
+    assert.equal(result.isRelevant, true);
+    assert.equal(result.label, "positive");
+  });
+
+  it("inherits the target and stance only when a reply explicitly agrees", async () => {
+    const result = await provider.analyze({
+      entityType: "comment",
+      entityId: "reply-agrees-negative",
+      text: "Chuẩn luôn",
+      postContext: "Bài thảo luận về VSF",
+      conversationContext: JSON.stringify([
+        { level: 1, text: "VSF làm chương trình này quá tệ" },
+      ]),
+      topic: "VinSmart Future",
+    });
+
+    assert.equal(result.isRelevant, true);
+    assert.equal(result.label, "negative");
+  });
+
+  it("inverts a parent stance when a reply explicitly disagrees", async () => {
+    const result = await provider.analyze({
+      entityType: "comment",
+      entityId: "reply-disagrees-negative",
+      text: "Không đúng đâu",
+      postContext: "Bài thảo luận về VSF",
+      conversationContext: JSON.stringify([
+        { level: 1, text: "VSF làm chương trình này quá tệ" },
+      ]),
+      topic: "VinSmart Future",
+    });
+
+    assert.equal(result.isRelevant, true);
+    assert.equal(result.label, "positive");
+  });
+
+  it("does not treat a generic Future mention as VinSmart Future", async () => {
+    const result = await provider.analyze({
+      entityType: "post",
+      entityId: "post-unrelated-future",
+      text: "Future of work đang thay đổi rất nhanh",
+      topic: "VinSmart Future",
+    });
+
+    assert.equal(result.isRelevant, false);
+    assert.equal(result.label, "neutral");
+  });
+
+  it("covers workplace experience about VinSmart Future", async () => {
+    const result = await provider.analyze({
+      entityType: "comment",
+      entityId: "comment-workplace",
+      text: "Lương thấp, quản lý tệ và thường xuyên bắt tăng ca",
+      postContext: "Mọi người review môi trường công sở tại VSF giúp mình",
+      topic: "VinSmart Future",
+    });
+
+    assert.equal(result.isRelevant, true);
+    assert.equal(result.label, "negative");
   });
 });

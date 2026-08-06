@@ -31,17 +31,30 @@ export class SentimentRepository {
         text: string;
         post_context: string | null;
         conversation_context: string | null;
+        conversation_group_id: string | null;
         attempt_count: number;
       }>(
         `
-          WITH candidates AS (
-            SELECT id
+          WITH next_group AS (
+            SELECT COALESCE(conversation_group_id, entity_id) AS group_id
             FROM sentiment_queue
             WHERE status IN ('queued', 'retry_wait')
               AND entity_type IN ('post', 'comment')
               AND available_at <= NOW()
             ORDER BY created_at ASC
-            FOR UPDATE SKIP LOCKED
+            LIMIT 1
+          ),
+          candidates AS (
+            SELECT queue.id
+            FROM sentiment_queue AS queue
+            CROSS JOIN next_group
+            WHERE queue.status IN ('queued', 'retry_wait')
+              AND queue.entity_type IN ('post', 'comment')
+              AND queue.available_at <= NOW()
+              AND COALESCE(queue.conversation_group_id, queue.entity_id)
+                = next_group.group_id
+            ORDER BY queue.created_at ASC
+            FOR UPDATE OF queue SKIP LOCKED
             LIMIT $1
           )
           UPDATE sentiment_queue AS queue
@@ -59,6 +72,7 @@ export class SentimentRepository {
                     queue.text,
                     queue.post_context,
                     queue.conversation_context,
+                    queue.conversation_group_id,
                     queue.attempt_count
         `,
         [limit],
@@ -73,6 +87,7 @@ export class SentimentRepository {
         text: row.text,
         postContext: row.post_context,
         conversationContext: row.conversation_context,
+        conversationGroupId: row.conversation_group_id,
         attemptCount: row.attempt_count,
       }));
     } catch (error) {

@@ -134,6 +134,7 @@ export function registerListeningRoutes(
                  parent.id AS ancestor_id,
                  parent.parent_comment_id,
                  parent.body,
+                 parent.observed_order,
                  1 AS depth
           FROM comments AS child
           JOIN comments AS parent
@@ -147,6 +148,7 @@ export function registerListeningRoutes(
                  parent.id AS ancestor_id,
                  parent.parent_comment_id,
                  parent.body,
+                 parent.observed_order,
                  ancestry.depth + 1
           FROM reply_ancestors AS ancestry
           JOIN comments AS parent
@@ -154,17 +156,108 @@ export function registerListeningRoutes(
           WHERE ancestry.depth < 8
             AND parent.workspace_id = $1
         ),
-        reply_context AS (
-          SELECT descendant_id,
-                 jsonb_agg(
-                   jsonb_build_object(
-                     'level', depth,
-                     'text', left(body, 1500)
+        reply_descendants AS (
+          SELECT parent.id AS target_id,
+                 child.id AS descendant_id,
+                 child.parent_comment_id,
+                 child.body,
+                 child.observed_order,
+                 1 AS depth
+          FROM comments AS parent
+          JOIN comments AS child
+            ON child.parent_comment_id = parent.id
+          WHERE parent.workspace_id = $1
+            AND child.workspace_id = $1
+
+          UNION ALL
+
+          SELECT descendants.target_id,
+                 child.id AS descendant_id,
+                 child.parent_comment_id,
+                 child.body,
+                 child.observed_order,
+                 descendants.depth + 1
+          FROM reply_descendants AS descendants
+          JOIN comments AS child
+            ON child.parent_comment_id = descendants.descendant_id
+          WHERE descendants.depth < 8
+            AND child.workspace_id = $1
+        ),
+        conversation_items AS (
+          SELECT ancestry.descendant_id AS target_id,
+                 ancestry.ancestor_id AS entity_id,
+                 ancestry.parent_comment_id,
+                 ancestry.body,
+                 ancestry.observed_order,
+                 ancestry.depth,
+                 'ancestor'::text AS relation,
+                 0 AS section
+          FROM reply_ancestors AS ancestry
+
+          UNION ALL
+
+          SELECT comment.id AS target_id,
+                 comment.id AS entity_id,
+                 comment.parent_comment_id,
+                 comment.body,
+                 comment.observed_order,
+                 0 AS depth,
+                 'target'::text AS relation,
+                 1 AS section
+          FROM comments AS comment
+          WHERE comment.workspace_id = $1
+
+          UNION ALL
+
+          SELECT descendants.target_id,
+                 descendants.descendant_id AS entity_id,
+                 descendants.parent_comment_id,
+                 descendants.body,
+                 descendants.observed_order,
+                 descendants.depth,
+                 'reply'::text AS relation,
+                 2 AS section
+          FROM reply_descendants AS descendants
+        ),
+        ranked_conversation_items AS (
+          SELECT item.*,
+                 row_number() OVER (
+                   PARTITION BY item.target_id
+                   ORDER BY item.section,
+                            CASE
+                              WHEN item.section = 0 THEN -item.depth
+                              ELSE item.depth
+                            END,
+                            item.observed_order NULLS LAST,
+                            item.entity_id
+                 ) AS segment_order,
+                 count(*) OVER (PARTITION BY item.target_id) AS segment_total
+          FROM conversation_items AS item
+        ),
+        conversation_context AS (
+          SELECT target_id,
+                 min(entity_id::text) FILTER (
+                   WHERE parent_comment_id IS NULL
+                 )::uuid AS root_comment_id,
+                 jsonb_build_object(
+                   'version', 2,
+                   'mode', 'comment_with_replies',
+                   'targetCommentId', target_id,
+                   'truncated', max(segment_total) > 60,
+                   'items', jsonb_agg(
+                     jsonb_build_object(
+                       'entityId', entity_id,
+                       'parentEntityId', parent_comment_id,
+                       'level', depth,
+                       'relation', relation,
+                       'text', left(body, 1500)
+                     )
+                     ORDER BY segment_order
                    )
-                   ORDER BY depth DESC
                  )::text AS conversation_context
-          FROM reply_ancestors
-          GROUP BY descendant_id
+          FROM ranked_conversation_items
+          WHERE segment_order <= 60
+          GROUP BY target_id
         ),
         source_entities AS (
           SELECT post.workspace_id,
@@ -172,7 +265,8 @@ export function registerListeningRoutes(
                  post.id AS entity_id,
                  post.body AS text,
                  NULL::text AS post_context,
-                 NULL::text AS conversation_context
+                 NULL::text AS conversation_context,
+                 NULL::uuid AS conversation_group_id
           FROM posts AS post
           WHERE post.workspace_id = $1
 
@@ -183,11 +277,12 @@ export function registerListeningRoutes(
                  comment.id AS entity_id,
                  comment.body AS text,
                  left(post.body, 4000) AS post_context,
-                 reply_context.conversation_context
+                 conversation_context.conversation_context,
+                 conversation_context.root_comment_id AS conversation_group_id
           FROM comments AS comment
           JOIN posts AS post ON post.id = comment.post_id
-          LEFT JOIN reply_context
-            ON reply_context.descendant_id = comment.id
+          LEFT JOIN conversation_context
+            ON conversation_context.target_id = comment.id
           WHERE comment.workspace_id = $1
         ),
         pending AS (
@@ -214,6 +309,7 @@ export function registerListeningRoutes(
             text,
             post_context,
             conversation_context,
+            conversation_group_id,
             status,
             attempt_count,
             available_at
@@ -224,6 +320,7 @@ export function registerListeningRoutes(
                  text,
                  post_context,
                  conversation_context,
+                 conversation_group_id,
                  'queued',
                  0,
                  now()
@@ -234,6 +331,7 @@ export function registerListeningRoutes(
             text = EXCLUDED.text,
             post_context = EXCLUDED.post_context,
             conversation_context = EXCLUDED.conversation_context,
+            conversation_group_id = EXCLUDED.conversation_group_id,
             status = 'queued',
             attempt_count = 0,
             available_at = now(),

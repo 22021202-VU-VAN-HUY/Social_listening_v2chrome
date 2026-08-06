@@ -81,5 +81,26 @@ export function isSafeReadControlElement(
   }
 
   const label = element.getAttribute("aria-label") ?? element.textContent ?? "";
-  return isSafeReadControlLabel(mode, label);
+  if (isSafeReadControlLabel(mode, label)) return true;
+
+  // Facebook's sort menu appends an explanatory sentence to the menuitem's
+  // accessible text (for example "All comments ... including potential
+  // spam"). Keep the click gate exact by accepting only a descendant whose
+  // complete label is the allow-listed option, and only inside a menu/radio
+  // option. This supports the real DOM without turning prefix matches into a
+  // general-purpose click path.
+  if (
+    (mode === "comment_filter_option" || mode === "post_filter_option") &&
+    element.matches(
+      "[role='menuitem'], [role='menuitemradio'], [role='menuitemcheckbox'], [role='radio']"
+    )
+  ) {
+    for (const descendant of [...element.querySelectorAll("*")].slice(0, 32)) {
+      const descendantLabel =
+        descendant.getAttribute("aria-label") ?? descendant.textContent ?? "";
+      if (isSafeReadControlLabel(mode, descendantLabel)) return true;
+    }
+  }
+
+  return false;
 }

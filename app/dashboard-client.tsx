@@ -11,7 +11,6 @@ import {
 import {
   DataNotice,
   EmptyState,
-  ProgressBar,
   SentimentBadge,
   type Sentiment,
 } from "./components/ui";
@@ -21,15 +20,12 @@ import {
   asNumber,
   asRecord,
   asString,
-  clearActiveJobId,
   formatDateTime,
   formatShortTime,
-  readActiveJobId,
   unwrapItems,
 } from "./lib/api";
 import {
-  openSocialListeningPrintWindow,
-  printSocialListeningReport,
+  downloadSocialListeningPdf,
   type PdfReportPost,
   type SocialListeningPdfReport,
 } from "./lib/pdf-report";
@@ -99,21 +95,6 @@ type DashboardSnapshot = {
   negative: number;
   timeline: TimelinePoint[];
   items: CommentItem[];
-};
-
-type ActiveJob = {
-  id: string;
-  status: string;
-  step: string;
-  currentSource: string;
-  progress: number;
-  postsScanned: number;
-  postsMatched: number;
-  commentsSaved: number;
-  sentimentDone: number;
-  sentimentTotal: number;
-  heartbeatAt: string | null;
-  error: string | null;
 };
 
 type DataMode = "live" | "offline" | "degraded";
@@ -801,116 +782,6 @@ function normalizeTimeline(value: unknown): TimelinePoint[] {
     .map(([, point]) => point);
 }
 
-function normalizeJob(value: unknown): ActiveJob | null {
-  const record = asRecord(value);
-  const id = String(record.id ?? record.jobId ?? record.job_id ?? "");
-  if (!id) return null;
-  const progressRecord = asRecord(record.progress);
-  const status = asString(record.status, "queued").toLowerCase();
-  const tasksTotal = asNumber(
-    progressRecord.tasksTotal ?? progressRecord.tasks_total,
-  );
-  const tasksDone = asNumber(
-    progressRecord.tasksDone ?? progressRecord.tasks_done,
-  );
-  const sourcesTotal = asNumber(
-    progressRecord.sourcesTotal ?? progressRecord.sources_total,
-  );
-  const sourcesDone = asNumber(
-    progressRecord.sourcesDone ?? progressRecord.sources_done,
-  );
-  const calculatedProgress = tasksTotal
-    ? (tasksDone / tasksTotal) * 100
-    : sourcesTotal
-      ? (sourcesDone / sourcesTotal) * 100
-      : ["completed", "complete"].includes(status)
-        ? 100
-        : 0;
-
-  return {
-    id,
-    status,
-    step: asString(
-      record.step ??
-        record.currentStep ??
-        progressRecord.step ??
-        progressRecord.stage,
-      status === "queued" ? "Đang chờ extension" : "Đang xử lý",
-    ),
-    currentSource: asString(
-      record.currentSource ??
-        record.current_source ??
-        progressRecord.currentSource ??
-        progressRecord.current_source,
-      "Chưa xác định",
-    ),
-    progress: asNumber(
-      record.progressPercent ??
-        record.progress_percent ??
-        progressRecord.percent ??
-        progressRecord.percentage,
-      calculatedProgress,
-    ),
-    postsScanned: asNumber(
-      record.postsScanned ??
-        record.posts_scanned ??
-        progressRecord.postsScanned ??
-        progressRecord.posts_scanned,
-    ),
-    postsMatched: asNumber(
-      record.postsMatched ??
-        record.posts_matched ??
-        progressRecord.postsMatched ??
-        progressRecord.posts_matched,
-    ),
-    commentsSaved: asNumber(
-      record.commentsSaved ??
-        record.comments_saved ??
-        progressRecord.commentsSaved ??
-        progressRecord.comments_saved,
-    ),
-    sentimentDone: asNumber(
-      record.sentimentDone ??
-        record.sentiment_done ??
-        progressRecord.sentimentDone ??
-        progressRecord.sentiment_done,
-    ),
-    sentimentTotal: asNumber(
-      record.sentimentTotal ??
-        record.sentiment_total ??
-        progressRecord.sentimentTotal ??
-        progressRecord.sentiment_total,
-    ),
-    heartbeatAt:
-      asString(
-        record.heartbeatAt ??
-          record.heartbeat_at ??
-          progressRecord.heartbeatAt ??
-          progressRecord.lastHeartbeatAt ??
-          progressRecord.heartbeat_at,
-      ) || null,
-    error:
-      asString(
-        record.error ??
-          record.errorMessage ??
-          record.error_message ??
-          record.lastError ??
-          record.last_error,
-      ) || null,
-  };
-}
-
-function isTerminalJob(status: string): boolean {
-  return [
-    "completed",
-    "complete",
-    "failed",
-    "cancelled",
-    "canceled",
-    "partial",
-  ].includes(status.toLowerCase());
-}
-
 function buildPdfReport(
   posts: PostItem[],
   comments: CommentItem[],
@@ -1006,7 +877,6 @@ function buildPdfReport(
 
 export function DashboardClient() {
   const [snapshot, setSnapshot] = useState<DashboardSnapshot | null>(null);
-  const [activeJob, setActiveJob] = useState<ActiveJob | null>(null);
   const [mode, setMode] = useState<DataMode>("live");
   const [message, setMessage] = useState("Đang kết nối API…");
   const [lastUpdated, setLastUpdated] = useState("");
@@ -1028,19 +898,14 @@ export function DashboardClient() {
   const refresh = useCallback(async () => {
     if (refreshing.current) return;
     refreshing.current = true;
-    const activeJobId = readActiveJobId();
-
     try {
-      const [summaryResult, timelineResult, commentsResult, jobResult] =
+      const [summaryResult, timelineResult, commentsResult] =
         await Promise.allSettled([
         apiRequest<unknown>("/dashboard/summary"),
         apiRequest<unknown>("/dashboard/timeline"),
-        apiRequest<unknown>(
-          "/listening/comments?limit=100&includeUnknownTime=true",
+        fetchAllListeningItems(
+          "/listening/comments?includeUnknownTime=true",
         ),
-        activeJobId
-          ? apiRequest<unknown>(`/jobs/${encodeURIComponent(activeJobId)}`)
-          : Promise.resolve(null),
       ]);
 
       const dataResults = [summaryResult, timelineResult, commentsResult];
@@ -1054,11 +919,10 @@ export function DashboardClient() {
         setMessage(
           "API chưa phản hồi. Không hiển thị số liệu giả; hãy chạy Docker backend rồi tải lại.",
         );
-        setActiveJob(null);
       } else {
         const comments =
           commentsResult.status === "fulfilled"
-            ? unwrapItems(commentsResult.value)
+            ? commentsResult.value
                 .map(normalizeComment)
                 .filter((item): item is CommentItem => item !== null)
                 .sort((a, b) => {
@@ -1096,25 +960,13 @@ export function DashboardClient() {
           items: comments,
         });
 
-        const jobUnavailable =
-          Boolean(activeJobId) && jobResult.status === "rejected";
-        const degraded = dataFailures > 0 || jobUnavailable;
+        const degraded = dataFailures > 0;
         setMode(degraded ? "degraded" : "live");
         setMessage(
           dataFailures > 0
             ? `${dataResults.length - dataFailures}/3 nguồn dữ liệu đã phản hồi. KPI hoặc timeline thiếu sẽ được suy ra từ feed gần nhất.`
-            : jobUnavailable
-              ? "KPI và feed đang trực tiếp; riêng tiến độ job chưa phản hồi."
-              : "KPI comment-only lấy từ API tổng hợp; feed 100 comment gần nhất làm mới mỗi 5 giây.",
+            : "Dữ liệu đang được làm mới tự động.",
         );
-
-        if (jobResult.status === "fulfilled" && jobResult.value) {
-          const job = normalizeJob(jobResult.value);
-          setActiveJob(job);
-          if (job && isTerminalJob(job.status)) clearActiveJobId(job.id);
-        } else if (!activeJobId || jobUnavailable) {
-          setActiveJob(null);
-        }
       }
       setLastUpdated(formatShortTime(new Date().toISOString()));
     } finally {
@@ -1183,15 +1035,6 @@ export function DashboardClient() {
 
   const exportPdf = useCallback(async () => {
     if (exportingPdf) return;
-    const printWindow = openSocialListeningPrintWindow();
-    if (!printWindow) {
-      setReportNotice({
-        kind: "error",
-        message:
-          "Trình duyệt đã chặn cửa sổ bản in. Hãy cho phép pop-up cho trang này rồi thử lại.",
-      });
-      return;
-    }
     setExportingPdf(true);
     setReportNotice(null);
     try {
@@ -1212,16 +1055,14 @@ export function DashboardClient() {
         .filter((comment): comment is CommentItem => comment !== null);
       const fallback = buildSnapshot(comments);
       const summary = normalizeSummary(summaryValue, fallback);
-      await printSocialListeningReport(
+      const filename = await downloadSocialListeningPdf(
         buildPdfReport(posts, comments, summary),
-        printWindow,
       );
       setReportNotice({
         kind: "success",
-        message: `Đã mở bản in gồm cơ cấu sắc thái và ${posts.length.toLocaleString("vi-VN")} bài post. Chọn “Save as PDF” hoặc “Lưu dưới dạng PDF” trong hộp thoại in.`,
+        message: `Đã tải ${filename}, gồm cơ cấu sắc thái và ${posts.length.toLocaleString("vi-VN")} bài post.`,
       });
     } catch (error) {
-      printWindow.close();
       setReportNotice({
         kind: "error",
         message:
@@ -1264,15 +1105,9 @@ export function DashboardClient() {
 
   return (
     <div className="page-stack">
-      <section className="page-intro">
+      <section className="page-intro dashboard-intro">
         <div>
-          <span className="section-kicker">Tín hiệu từ bình luận</span>
           <h2>Người dùng đang nói gì về VinSmart Future?</h2>
-          <p>
-            Bình luận gốc và reply đều được tính chung là bình luận trong KPI,
-            tỷ lệ sắc thái và biểu đồ. Reply chỉ dùng quan hệ cha-con để hiển thị
-            đúng luồng hội thoại như Facebook, không tách thành một chỉ số riêng.
-          </p>
         </div>
         <div className="intro-actions">
           <button
@@ -1282,22 +1117,18 @@ export function DashboardClient() {
             disabled={exportingPdf}
           >
             <span aria-hidden="true">{exportingPdf ? "◌" : "⇩"}</span>
-            {exportingPdf ? "Đang dựng bản in…" : "Xuất / In PDF"}
+            {exportingPdf ? "Đang tạo PDF…" : "Tải PDF"}
           </button>
-          <a className="button button-secondary" href="/settings">
-            Chỉnh nguồn crawl
-          </a>
-          <a className="button button-primary" href="/jobs">
-            Xem tiến trình
-          </a>
         </div>
       </section>
 
-      <DataNotice
-        mode={mode}
-        message={message}
-        lastUpdated={lastUpdated ? `Cập nhật ${lastUpdated}` : undefined}
-      />
+      {mode !== "live" && (
+        <DataNotice
+          mode={mode}
+          message={message}
+          lastUpdated={lastUpdated ? `Cập nhật ${lastUpdated}` : undefined}
+        />
+      )}
 
       {reportNotice && (
         <div
@@ -1315,14 +1146,8 @@ export function DashboardClient() {
         <article className="metric-card metric-total">
           <span className="metric-label">Bình luận đã lọc</span>
           <strong>{snapshot.total.toLocaleString("vi-VN")}</strong>
-          <p>
-            <span>Đã gộp cả reply vào tổng bình luận</span>
+          <p className="metric-total-meta">
             <span>{snapshot.posts.toLocaleString("vi-VN")} bài post</span>
-            {snapshot.unknownTime > 0 && (
-              <span>
-                {snapshot.unknownTime.toLocaleString("vi-VN")} chưa rõ thời gian
-              </span>
-            )}
             {snapshot.pending > 0 && (
               <span>{snapshot.pending.toLocaleString("vi-VN")} chờ AI</span>
             )}
@@ -1331,17 +1156,14 @@ export function DashboardClient() {
         <article className="metric-card metric-positive">
           <span className="metric-label">Tích cực</span>
           <strong>{snapshot.positive.toLocaleString("vi-VN")}</strong>
-          <p>{positiveRate}% comment đã phân tích</p>
         </article>
         <article className="metric-card metric-neutral">
           <span className="metric-label">Trung lập</span>
           <strong>{snapshot.neutral.toLocaleString("vi-VN")}</strong>
-          <p>{neutralRate}% comment đã phân tích</p>
         </article>
         <article className="metric-card metric-negative">
           <span className="metric-label">Tiêu cực</span>
           <strong>{snapshot.negative.toLocaleString("vi-VN")}</strong>
-          <p>{negativeRate}% comment đã phân tích</p>
         </article>
       </section>
 
@@ -1349,7 +1171,6 @@ export function DashboardClient() {
         <article className="panel sentiment-panel">
           <div className="panel-heading">
             <div>
-              <span className="section-kicker">AI sentiment</span>
               <h3>Cơ cấu sắc thái comment</h3>
             </div>
             <span className="quiet-badge">{totalSentiment} mẫu</span>
@@ -1395,7 +1216,6 @@ export function DashboardClient() {
         <article className="panel timeline-panel">
           <div className="panel-heading">
             <div>
-              <span className="section-kicker">Nhịp thảo luận</span>
               <h3>Comment theo ngày</h3>
             </div>
             <span className="quiet-badge">7 ngày</span>
@@ -1444,76 +1264,9 @@ export function DashboardClient() {
         </article>
       </section>
 
-      <section className="panel active-job-panel">
-        <div className="panel-heading">
-          <div>
-            <span className="section-kicker">Extension nền</span>
-            <h3>Job đang hoạt động</h3>
-          </div>
-          {activeJob && (
-            <span className={`job-status status-${activeJob.status}`}>
-              <span aria-hidden="true" />
-              {activeJob.status}
-            </span>
-          )}
-        </div>
-        {activeJob ? (
-          <div className="active-job-layout">
-            <div>
-              <div className="job-step">
-                <span>Bước hiện tại</span>
-                <strong>{activeJob.step}</strong>
-                <p>{activeJob.currentSource}</p>
-              </div>
-              <ProgressBar
-                value={activeJob.progress}
-                label="Tiến độ toàn bộ job"
-              />
-            </div>
-            <div className="job-stat-grid">
-              <div>
-                <span>Post đã quét</span>
-                <strong>{activeJob.postsScanned}</strong>
-              </div>
-              <div>
-                <span>Post lưu ngữ cảnh</span>
-                <strong>{activeJob.postsMatched}</strong>
-              </div>
-              <div>
-                <span>Comment đã lưu</span>
-                <strong>{activeJob.commentsSaved}</strong>
-              </div>
-              <div>
-                <span>AI hoàn tất</span>
-                <strong>
-                  {activeJob.sentimentDone}/{activeJob.sentimentTotal}
-                </strong>
-              </div>
-            </div>
-            <div className="job-heartbeat">
-              <span>Heartbeat gần nhất</span>
-              <strong>{formatDateTime(activeJob.heartbeatAt)}</strong>
-              {activeJob.error && <p className="inline-error">{activeJob.error}</p>}
-              <a href="/jobs">Chi tiết job →</a>
-            </div>
-          </div>
-        ) : (
-          <EmptyState
-            title="Không có job đang chạy"
-            description="Chọn group và bắt đầu lấy comment tại trang Thiết lập Facebook."
-            action={
-              <a className="button button-secondary button-small" href="/settings">
-                Mở thiết lập
-              </a>
-            }
-          />
-        )}
-      </section>
-
       <section className="panel content-panel">
         <div className="panel-heading content-heading">
           <div>
-            <span className="section-kicker">Listening feed</span>
             <h3>Bình luận & phản hồi</h3>
           </div>
           <div className="content-heading-actions">
@@ -1608,8 +1361,7 @@ export function DashboardClient() {
                       {post.source} ·{" "}
                       {post.postPublishedAt
                         ? formatDateTime(post.postPublishedAt)
-                        : "Không xác định thời gian"}{" "}
-                      · <span aria-label="Công khai">●</span>
+                        : "Không xác định thời gian"}
                     </span>
                   </div>
                   <span
@@ -1631,16 +1383,12 @@ export function DashboardClient() {
                       <span className="pending-badge">Chờ AI</span>
                     )}
                   </div>
-                  <span className="facebook-more" aria-hidden="true">
-                    •••
-                  </span>
                 </header>
 
                 <p className="facebook-post-copy">{post.postContext}</p>
 
                 <div className="facebook-post-meta">
                   <div className="facebook-keywords">
-                    <span>Bắt được keyword</span>
                     {keywords.length ? (
                       keywords.map((keyword) => (
                         <span className="keyword-chip" key={keyword}>
@@ -1654,14 +1402,6 @@ export function DashboardClient() {
                     )}
                   </div>
                   <div className="facebook-post-links">
-                    <span
-                      title={`Bài được thu thập lúc ${formatDateTime(post.postCollectedAt)}`}
-                    >
-                      Thu thập {formatDateTime(post.postCollectedAt)}
-                    </span>
-                    {post.postTimeParseStatus === "unknown" && (
-                      <span className="time-unknown">Thời gian chưa parse</span>
-                    )}
                     {post.postUrl && (
                       <a
                         href={post.postUrl}
@@ -1676,7 +1416,6 @@ export function DashboardClient() {
 
                 <div className="facebook-comment-summary">
                   <span>{comments.length} bình luận</span>
-                  <span>Chỉ đọc · Không tương tác</span>
                 </div>
 
                 <div className="facebook-comments">
@@ -1737,24 +1476,11 @@ export function DashboardClient() {
                           </div>
                         </div>
                         <div className="facebook-comment-actions">
-                          <span>
-                            {depth ? `Phản hồi bậc ${depth}` : "Bình luận"}
-                          </span>
                           <time>
                             {item.commentPublishedAt
                               ? formatDateTime(item.commentPublishedAt)
                               : "Không xác định thời gian"}
                           </time>
-                          {item.commentTimeParseStatus === "unknown" && (
-                            <span className="time-warning">
-                              Timestamp chưa parse
-                            </span>
-                          )}
-                          <span
-                            title={`Thu thập lúc ${formatDateTime(item.commentCollectedAt)}`}
-                          >
-                            Thu thập {formatDateTime(item.commentCollectedAt)}
-                          </span>
                           {item.originalUrl && (
                             <a
                               href={item.originalUrl}

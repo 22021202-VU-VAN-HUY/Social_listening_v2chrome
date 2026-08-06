@@ -23,6 +23,7 @@ const SESSION_RUN_KEY = "__listening_social_owned_run";
 // when no additional comments are exposed. Bound those unproductive rounds so
 // one post is returned as partial and the durable checkpoint can move forward.
 export const COMMENT_NO_GROWTH_ROUND_LIMIT = 6;
+export const COMMENT_EXPECTED_NO_GROWTH_ROUND_LIMIT = 10;
 
 interface CoverageAssessment {
   coverageStatus: CoverageStatus;
@@ -227,10 +228,23 @@ export class FacebookContentRunner {
     return clicked;
   }
 
+  private clickNextSafeControl(
+    mode: SafeReadControlMode,
+    scope: ParentNode = this.document
+  ): number {
+    for (const element of scope.querySelectorAll(
+      "button, [role='button'], [role='menuitem'], [role='menuitemradio']"
+    )) {
+      if (this.clickVerifiedControl(mode, element)) return 1;
+    }
+    return 0;
+  }
+
   private async clickSafeControlsAndWait(
     mode: SafeReadControlMode,
     timeoutMs: number,
-    signal: AbortSignal
+    signal: AbortSignal,
+    scope: ParentNode = this.document
   ): Promise<{ changed: boolean; clicked: number }> {
     if (signal.aborted) throw abortError();
     let clicked = 0;
@@ -259,7 +273,10 @@ export class FacebookContentRunner {
       });
       const timer = setTimeout(() => finish(false), timeoutMs);
       signal.addEventListener("abort", onAbort, { once: true });
-      clicked = this.clickSafeControls(mode);
+      // Facebook can discard rapid clicks when several reply branches are
+      // opened in the same task. Open one branch, wait for its DOM update, then
+      // let the next crawl round process the next control.
+      clicked = this.clickNextSafeControl(mode, scope);
       if (clicked === 0) finish(false);
     });
     return { changed, clicked };
@@ -267,9 +284,10 @@ export class FacebookContentRunner {
 
   private findSafeControl(
     mode: SafeReadControlMode,
-    selector: string
+    selector: string,
+    scope: ParentNode = this.document
   ): HTMLElement | null {
-    for (const element of this.document.querySelectorAll(selector)) {
+    for (const element of scope.querySelectorAll(selector)) {
       if (isSafeReadControlElement(mode, element)) return element;
     }
     return null;
@@ -279,10 +297,11 @@ export class FacebookContentRunner {
     mode: SafeReadControlMode,
     selector: string,
     timeoutMs: number,
-    signal: AbortSignal
+    signal: AbortSignal,
+    scope: ParentNode = this.document
   ): Promise<HTMLElement | null> {
     if (signal.aborted) throw abortError();
-    const existing = this.findSafeControl(mode, selector);
+    const existing = this.findSafeControl(mode, selector, scope);
     if (existing) return existing;
 
     return new Promise((resolve, reject) => {
@@ -303,7 +322,7 @@ export class FacebookContentRunner {
         reject(abortError());
       };
       const observer = new MutationObserver(() => {
-        const element = this.findSafeControl(mode, selector);
+        const element = this.findSafeControl(mode, selector, scope);
         if (element) finish(element);
       });
       observer.observe(this.document.documentElement, {
@@ -314,53 +333,83 @@ export class FacebookContentRunner {
       signal.addEventListener("abort", onAbort, { once: true });
 
       // Close the gap between the initial lookup and observer registration.
-      const afterObserve = this.findSafeControl(mode, selector);
+      const afterObserve = this.findSafeControl(mode, selector, scope);
       if (afterObserve) finish(afterObserve);
     });
   }
 
   private async selectAllCommentsFilter(
     timeoutMs: number,
-    signal: AbortSignal
-  ): Promise<void> {
-    const optionSelector = "[role='menuitem'], [role='menuitemradio']";
+    signal: AbortSignal,
+    scope: ParentNode
+  ): Promise<boolean> {
+    const optionSelector =
+      "[role='menuitem'], [role='menuitemradio'], [role='menuitemcheckbox'], [role='radio']";
     const triggerSelector = "button, [role='button']";
 
     const alreadyOpen = this.findSafeControl(
       "comment_filter_option",
-      optionSelector
+      optionSelector,
+      scope
     );
     if (alreadyOpen) {
-      this.clickVerifiedControl("comment_filter_option", alreadyOpen);
-      return;
+      if (!this.clickVerifiedControl("comment_filter_option", alreadyOpen)) {
+        return false;
+      }
+      return Boolean(
+        await this.waitForSafeControl(
+          "comment_filter_option",
+          triggerSelector,
+          timeoutMs,
+          signal,
+          scope
+        )
+      );
     }
 
     // A closed trigger labelled "All comments" means the desired filter is
     // already selected. Do not click it, because that would toggle the menu.
     if (
-      this.findSafeControl("comment_filter_option", triggerSelector)
+      this.findSafeControl(
+        "comment_filter_option",
+        triggerSelector,
+        scope
+      )
     ) {
-      return;
+      return true;
     }
 
     const trigger = this.findSafeControl(
       "comment_filter_trigger",
-      triggerSelector
+      triggerSelector,
+      scope
     );
-    if (!trigger) return;
+    // Facebook omits the sort control on very small conversations. In that
+    // case there is no alternative filtered view to switch away from.
+    if (!trigger) return true;
 
-    // Open exactly once. If the option does not materialize, leave the filter
-    // unresolved; later coverage remains unknown instead of toggling repeatedly.
-    this.clickVerifiedControl("comment_filter_trigger", trigger);
+    if (!this.clickVerifiedControl("comment_filter_trigger", trigger)) {
+      return false;
+    }
     const option = await this.waitForSafeControl(
       "comment_filter_option",
       optionSelector,
       timeoutMs,
-      signal
+      signal,
+      scope
     );
-    if (option) {
-      this.clickVerifiedControl("comment_filter_option", option);
+    if (!option || !this.clickVerifiedControl("comment_filter_option", option)) {
+      return false;
     }
+    return Boolean(
+      await this.waitForSafeControl(
+        "comment_filter_option",
+        triggerSelector,
+        timeoutMs,
+        signal,
+        scope
+      )
+    );
   }
 
   private isRecentPostsControlSelected(element: Element): boolean {
@@ -490,21 +539,25 @@ export class FacebookContentRunner {
     mode: "groups" | "posts" | "comments",
     timeoutMs: number,
     signal: AbortSignal,
-    clickControls = true
+    clickControls = true,
+    scope: ParentNode = this.document
   ): Promise<boolean> {
     if (signal.aborted) throw abortError();
     if (clickControls) this.clickSafeControls(mode);
     const before = this.document.documentElement.scrollHeight;
     const groupScroller =
       mode === "groups" ? this.findJoinedGroupsScroller() : null;
-    const groupScrollTop = groupScroller?.scrollTop ?? 0;
-    if (groupScroller) {
-      const step = Math.max(groupScroller.clientHeight * 0.8, 600);
-      groupScroller.scrollTop = Math.min(
-        groupScroller.scrollHeight,
-        groupScroller.scrollTop + step
+    const commentScroller =
+      mode === "comments" ? this.findCommentScroller(scope) : null;
+    const nestedScroller = groupScroller ?? commentScroller;
+    const nestedScrollTop = nestedScroller?.scrollTop ?? 0;
+    if (nestedScroller) {
+      const step = Math.max(nestedScroller.clientHeight * 0.8, 600);
+      nestedScroller.scrollTop = Math.min(
+        nestedScroller.scrollHeight,
+        nestedScroller.scrollTop + step
       );
-      groupScroller.dispatchEvent(new Event("scroll"));
+      nestedScroller.dispatchEvent(new Event("scroll"));
     }
     this.win.scrollTo({ top: before, behavior: "auto" });
     const changed = await waitForMutation(this.document, timeoutMs, signal);
@@ -512,7 +565,59 @@ export class FacebookContentRunner {
     return (
       changed ||
       after > before ||
-      Boolean(groupScroller && groupScroller.scrollTop > groupScrollTop)
+      Boolean(nestedScroller && nestedScroller.scrollTop > nestedScrollTop)
+    );
+  }
+
+  private findCommentScope(postExternalId: string): ParentNode {
+    for (const dialog of this.document.querySelectorAll("[role='dialog']")) {
+      for (const anchor of dialog.querySelectorAll("a[href*='/posts/']")) {
+        const href = anchor.getAttribute("href");
+        if (!href) continue;
+        try {
+          const path = new URL(href, this.win.location.href).pathname;
+          if (/\/posts\/([^/?#]+)/u.exec(path)?.[1] === postExternalId) {
+            return dialog;
+          }
+        } catch {
+          // Ignore malformed navigation links and continue within the dialog.
+        }
+      }
+    }
+    return this.document;
+  }
+
+  private findCommentScroller(scope: ParentNode): HTMLElement | null {
+    const candidates = new Set<HTMLElement>();
+    const seeds = [
+      ...scope.querySelectorAll(
+        "a[href*='comment_id='], [data-sl-comment], [data-commentid], [data-comment-id]"
+      ),
+      ...[...scope.querySelectorAll("button, [role='button']")].filter(
+        (element) => isSafeReadControlElement("comments", element)
+      )
+    ];
+
+    for (const seed of seeds) {
+      let ancestor = seed.parentElement;
+      while (ancestor && ancestor !== this.document.body) {
+        if (
+          ancestor.scrollHeight > ancestor.clientHeight + 8 &&
+          ancestor.clientHeight > 0
+        ) {
+          candidates.add(ancestor);
+        }
+        ancestor = ancestor.parentElement;
+      }
+    }
+
+    return (
+      [...candidates].sort(
+        (left, right) =>
+          right.scrollHeight -
+          right.clientHeight -
+          (left.scrollHeight - left.clientHeight)
+      )[0] ?? null
     );
   }
 
@@ -665,10 +770,15 @@ export class FacebookContentRunner {
     let plateau = 0;
     let noGrowthRounds = 0;
     let hitLimit = false;
+    let expectedCount = this.adapter().expectedCommentCount(
+      command.postExternalId
+    );
 
-    await this.selectAllCommentsFilter(
+    let commentScope = this.findCommentScope(command.postExternalId);
+    const allCommentsSelected = await this.selectAllCommentsFilter(
       command.limits.mutationWaitMs,
-      signal
+      signal,
+      commentScope
     );
 
     for (
@@ -677,6 +787,10 @@ export class FacebookContentRunner {
       round += 1
     ) {
       const before = byId.size;
+      commentScope = this.findCommentScope(command.postExternalId);
+      expectedCount =
+        this.adapter().expectedCommentCount(command.postExternalId) ??
+        expectedCount;
       for (const comment of this.adapter().extractComments({
         postExternalId: command.postExternalId,
         maxComments: command.limits.maxCommentsPerPost
@@ -687,18 +801,23 @@ export class FacebookContentRunner {
         hitLimit = true;
         break;
       }
+      if (expectedCount !== null && byId.size >= expectedCount) {
+        break;
+      }
 
       const expansion = await this.clickSafeControlsAndWait(
         "comments",
         command.limits.mutationWaitMs,
-        signal
+        signal,
+        commentScope
       );
       this.progress(command.runId, "crawl_post", round + 1, byId.size);
       const changed = await this.scrollOnce(
         "comments",
         command.limits.mutationWaitMs,
         signal,
-        false
+        false,
+        commentScope
       );
       // Collect once more after expansion/scroll so comments revealed by the
       // final permitted round are not deferred to a round that never runs.
@@ -711,6 +830,9 @@ export class FacebookContentRunner {
       if (byId.size >= command.limits.maxCommentsPerPost) {
         hitLimit = true;
       }
+      expectedCount =
+        this.adapter().expectedCommentCount(command.postExternalId) ??
+        expectedCount;
       this.progress(command.runId, "crawl_post", round + 1, byId.size);
       noGrowthRounds = byId.size === before ? noGrowthRounds + 1 : 0;
       plateau =
@@ -722,8 +844,12 @@ export class FacebookContentRunner {
           : 0;
       if (
         hitLimit ||
-        plateau >= 2 ||
-        noGrowthRounds >= COMMENT_NO_GROWTH_ROUND_LIMIT
+        (expectedCount !== null && byId.size >= expectedCount) ||
+        (expectedCount === null && plateau >= 2) ||
+        noGrowthRounds >=
+          (expectedCount === null
+            ? COMMENT_NO_GROWTH_ROUND_LIMIT
+            : COMMENT_EXPECTED_NO_GROWTH_ROUND_LIMIT)
       ) {
         break;
       }
@@ -735,10 +861,24 @@ export class FacebookContentRunner {
       windowStartUtc: command.windowStartUtc,
       windowEndUtc: command.windowEndUtc
     });
-    const coverage = assessCommentCoverage(
-      hitLimit,
-      this.adapter().hasExplicitCommentEnd()
-    );
+    const expectedCountReached =
+      expectedCount !== null && byId.size >= expectedCount;
+    const coverage = !allCommentsSelected
+      ? {
+          coverageStatus: "partial" as const,
+          partialReason: "all_comments_filter_unconfirmed"
+        }
+      : expectedCountReached && !hitLimit
+        ? { coverageStatus: "complete" as const }
+        : expectedCount !== null && !hitLimit
+          ? {
+              coverageStatus: "partial" as const,
+              partialReason: "comment_count_incomplete"
+            }
+          : assessCommentCoverage(
+              hitLimit,
+              this.adapter().hasExplicitCommentEnd()
+            );
     const result: CrawlPostResult = {
       post,
       comments: [...byId.values()],

@@ -119,6 +119,21 @@ function visibleText(element: Element | null): string {
   return rendered.replace(/\s+/gu, " ").trim();
 }
 
+function displayedCount(value: string): number | null {
+  const normalized = value.normalize("NFKC").trim();
+  const compact = /(\d+(?:[.,]\d+)?)\s*([km])\b/iu.exec(normalized);
+  if (compact) {
+    const amount = Number(compact[1]?.replace(",", "."));
+    if (!Number.isFinite(amount)) return null;
+    return Math.round(amount * (compact[2]?.toLocaleLowerCase("en-US") === "m" ? 1_000_000 : 1_000));
+  }
+
+  const integer = /\d[\d.,\s]*/u.exec(normalized)?.[0];
+  if (!integer) return null;
+  const parsed = Number(integer.replace(/\D/gu, ""));
+  return Number.isSafeInteger(parsed) ? parsed : null;
+}
+
 function normalizedLabel(value: string): string {
   return value
     .normalize("NFD")
@@ -1056,6 +1071,55 @@ export class FacebookDomAdapter {
       "[data-sl-comments-end='true']",
       COMMENT_END_LABELS
     );
+  }
+
+  public expectedCommentCount(postExternalId: string): number | null {
+    const scopes = new Set<ParentNode>();
+    for (const root of this.findPostRoots()) {
+      const postUrl = this.findPostUrl(root);
+      if (postUrl && parsePostExternalId(postUrl) === postExternalId) {
+        scopes.add(root);
+        const dialog = root.closest("[role='dialog']");
+        if (dialog) scopes.add(dialog);
+      }
+    }
+
+    for (const dialog of this.document.querySelectorAll("[role='dialog']")) {
+      const ownsPost = [...dialog.querySelectorAll("a[href*='/posts/']")].some(
+        (anchor) => {
+          const href = readHref(anchor);
+          return href
+            ? parsePostExternalId(new URL(href, this.pageUrl).toString()) ===
+                postExternalId
+            : false;
+        }
+      );
+      if (ownsPost) scopes.add(dialog);
+    }
+
+    if (
+      scopes.size === 0 &&
+      parsePostExternalId(this.pageUrl) === postExternalId
+    ) {
+      scopes.add(this.document);
+    }
+
+    let expected: number | null = null;
+    for (const scope of scopes) {
+      for (const control of scope.querySelectorAll(
+        "button, [role='button']"
+      )) {
+        const label = normalizedLabel(control.getAttribute("aria-label") ?? "");
+        if (label !== "write a comment" && label !== "viet binh luan") {
+          continue;
+        }
+        const count = displayedCount(visibleText(control));
+        if (count !== null && (expected === null || count > expected)) {
+          expected = count;
+        }
+      }
+    }
+    return expected;
   }
 
   private findCommentUrl(root: Element): string | null {

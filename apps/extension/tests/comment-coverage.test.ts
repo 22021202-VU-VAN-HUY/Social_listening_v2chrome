@@ -42,6 +42,96 @@ describe("comment coverage assessment", () => {
     ]);
   });
 
+  it("uses Facebook's displayed total and scrolls the post dialog for more comments", async () => {
+    const dom = new JSDOM(
+      `<button id="background-reply" type="button">View 9 replies</button>
+      <div role="dialog">
+        <div id="comment-scroller">
+          <article data-sl-post>
+            <span data-sl-author>Post author</span>
+            <div data-sl-post-body>VSF post</div>
+            <a href="https://www.facebook.com/groups/1/posts/2/">Post</a>
+            <button type="button" aria-label="Write a comment"><span>2</span></button>
+            <div data-sl-comment data-sl-comment-id="comment-1">
+              <span data-sl-comment-author>Author one</span>
+              <div data-sl-comment-body>First comment</div>
+            </div>
+          </article>
+        </div>
+      </div>`,
+      { url: "https://www.facebook.com/groups/1/posts/2/" }
+    );
+    Object.defineProperty(dom.window, "scrollTo", {
+      configurable: true,
+      value: () => undefined
+    });
+    let backgroundClicks = 0;
+    dom.window.document
+      .querySelector("#background-reply")
+      ?.addEventListener("click", () => {
+        backgroundClicks += 1;
+      });
+    const scroller = dom.window.document.querySelector<HTMLElement>(
+      "#comment-scroller"
+    );
+    if (!scroller) throw new Error("Missing comment scroller.");
+    Object.defineProperty(scroller, "clientHeight", {
+      configurable: true,
+      value: 100
+    });
+    Object.defineProperty(scroller, "scrollHeight", {
+      configurable: true,
+      value: 500
+    });
+    scroller.addEventListener(
+      "scroll",
+      () => {
+        dom.window.document.querySelector("article")?.insertAdjacentHTML(
+          "beforeend",
+          `<div data-sl-comment data-sl-comment-id="comment-2">
+            <span data-sl-comment-author>Author two</span>
+            <div data-sl-comment-body>Second comment</div>
+          </div>`
+        );
+      },
+      { once: true }
+    );
+
+    const adapter = new FacebookDomAdapter(
+      dom.window.document,
+      dom.window.location.href
+    );
+    expect(adapter.expectedCommentCount("2")).toBe(2);
+
+    const runner = new FacebookContentRunner(
+      dom.window.document,
+      dom.window as unknown as Window
+    );
+    await runner.handle({ type: "ASSIGN_RUN", runId: "dialog-scroll-run" });
+    const result = (await runner.handle({
+      type: "CRAWL_POST",
+      runId: "dialog-scroll-run",
+      sourceExternalId: "1",
+      postExternalId: "2",
+      keywords: [{ value: "VSF", matchMode: "whole_word" }],
+      windowStartUtc: null,
+      windowEndUtc: null,
+      limits: {
+        maxCommentsPerPost: 20,
+        maxCommentExpandRounds: 4,
+        mutationWaitMs: 1
+      }
+    })) as CrawlPostResult;
+
+    expect(scroller.scrollTop).toBeGreaterThan(0);
+    expect(backgroundClicks).toBe(0);
+    expect(result.comments.map((comment) => comment.externalId)).toEqual([
+      "comment-1",
+      "comment-2"
+    ]);
+    expect(result.coverageStatus).toBe("complete");
+  });
+
   it("reports liveness and leaves an unproductive comment control behind", async () => {
     const dom = new JSDOM(
       `<article data-sl-post>

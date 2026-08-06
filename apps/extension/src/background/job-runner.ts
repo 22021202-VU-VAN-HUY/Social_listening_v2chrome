@@ -8,7 +8,6 @@ import { buildThreadsSearchUrl } from "../content/threads-urls";
 import { ExtensionStorage } from "../shared/storage";
 import {
   claimPostForCommentCrawl,
-  excludePreviouslySeenPosts,
   mergePostKeywordHits
 } from "../shared/post-merge";
 import type {
@@ -539,18 +538,12 @@ export class JobRunner {
             mutationWaitMs: snapshot.limits.mutationWaitMs
           }
         });
-        const knownPostUrls = await this.api.findKnownPostUrls({
-          jobId: record.jobId,
-          ...lease,
-          urls: searchResult.posts.map((post) => post.url)
-        });
-        const unseenResult = excludePreviouslySeenPosts(
-          searchResult.posts,
-          knownPostUrls
-        );
         const postsToUpload: SafePostDto[] = [];
         const postsForCommentCrawl: SafePostDto[] = [];
-        for (const post of unseenResult.posts) {
+        // Search already scopes every result by source/group, keyword and the
+        // requested time window. Revisit matches even when their canonical URL
+        // exists in an older job so newly added comments/replies are upserted.
+        for (const post of searchResult.posts) {
           const existingPost = groupPosts.get(post.externalId);
           if (!existingPost) {
             groupPosts.set(post.externalId, post);
@@ -560,6 +553,7 @@ export class JobRunner {
           }
           const merged = mergePostKeywordHits(existingPost, post);
           groupPosts.set(post.externalId, merged.post);
+          postsForCommentCrawl.push(merged.post);
           if (merged.hasNewKeywordHit) {
             postsToUpload.push(merged.post);
           }
@@ -707,7 +701,7 @@ export class JobRunner {
             sourceExternalId: source.externalId,
             keyword: keyword.value,
             postsMatched: postsForCommentCrawl.length,
-            postsSkippedPreviouslySeen: unseenResult.skipped
+            postsRefreshed: postsForCommentCrawl.length
           },
           progress
         });

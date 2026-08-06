@@ -126,6 +126,31 @@ describe("Facebook read-only control gate", () => {
     ).toBe(false);
   });
 
+  it("accepts the exact filter title inside Facebook's descriptive menuitem", () => {
+    document.body.innerHTML = `
+      <div id="all-comments" role="menuitem">
+        <div><span>All comments</span></div>
+        <div>Show all comments, including potential spam.</div>
+      </div>
+      <div id="unsafe-option" role="menuitem">
+        <div><span>All comments and share</span></div>
+      </div>
+    `;
+
+    expect(
+      isSafeReadControlElement(
+        "comment_filter_option",
+        document.querySelector("#all-comments")!
+      )
+    ).toBe(true);
+    expect(
+      isSafeReadControlElement(
+        "comment_filter_option",
+        document.querySelector("#unsafe-option")!
+      )
+    ).toBe(false);
+  });
+
   it("opens the sort menu once and selects All comments without toggling it closed", async () => {
     document.body.innerHTML = `
       <button id="sort" type="button" aria-label="Most relevant"></button>
@@ -148,7 +173,10 @@ describe("Facebook read-only control gate", () => {
       triggerClicks += 1;
       const option = document.createElement("div");
       option.setAttribute("role", "menuitem");
-      option.setAttribute("aria-label", "All comments");
+      option.innerHTML = `
+        <div><span>All comments</span></div>
+        <div>Show all comments, including potential spam.</div>
+      `;
       option.addEventListener("click", () => {
         optionClicks += 1;
         trigger.setAttribute("aria-label", "All comments");

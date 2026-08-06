@@ -17,7 +17,7 @@ const ConfigSchema = z.object({
     .uuid()
     .default("00000000-0000-4000-8000-000000000001"),
   WORKER_POLL_MS: z.coerce.number().int().min(250).max(60_000).default(2_000),
-  WORKER_BATCH_SIZE: z.coerce.number().int().min(1).max(50).default(5),
+  WORKER_BATCH_SIZE: z.coerce.number().int().min(1).max(50).default(50),
   WORKER_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(20).default(5),
   SENTIMENT_PROVIDER: z
     .enum([

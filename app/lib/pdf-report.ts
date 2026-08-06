@@ -1,3 +1,9 @@
+import type {
+  Content,
+  ContentStack,
+  TDocumentDefinitions,
+} from "pdfmake/interfaces";
+
 export type ReportSentiment = "positive" | "negative" | "neutral" | null;
 
 export type PdfReportComment = {
@@ -37,13 +43,36 @@ export type SocialListeningPdfReport = {
   posts: PdfReportPost[];
 };
 
-function escapeHtml(value: string): string {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#039;");
+type VirtualFileSystem = Record<string, string>;
+
+const COLORS = {
+  red: "#E5092F",
+  redDark: "#B50724",
+  redSoft: "#FFF0F3",
+  ink: "#17171A",
+  muted: "#667085",
+  line: "#D9DDE5",
+  surface: "#F4F6F8",
+  positive: "#12845E",
+  positiveSoft: "#E8F7F1",
+  neutral: "#A46D00",
+  neutralSoft: "#FFF6D8",
+  negative: "#C52D3A",
+  negativeSoft: "#FFECEF",
+  pending: "#657084",
+  pendingSoft: "#EEF1F5",
+  white: "#FFFFFF",
+} as const;
+
+function formatDate(value: string | null): string {
+  if (!value) return "Không xác định thời gian";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat("vi-VN", {
+    dateStyle: "short",
+    timeStyle: "short",
+    timeZone: "Asia/Ho_Chi_Minh",
+  }).format(date);
 }
 
 function safeUrl(value: string | null): string | null {
@@ -58,105 +87,287 @@ function safeUrl(value: string | null): string | null {
   }
 }
 
-function formatDate(value: string | null): string {
-  if (!value) return "Không xác định thời gian";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return new Intl.DateTimeFormat("vi-VN", {
-    dateStyle: "short",
-    timeStyle: "short",
-    timeZone: "Asia/Ho_Chi_Minh",
-  }).format(date);
-}
-
-function sentimentText(value: ReportSentiment): string {
-  if (value === "positive") return "Tích cực";
-  if (value === "negative") return "Tiêu cực";
-  if (value === "neutral") return "Trung lập";
-  return "Chờ AI";
-}
-
-function sentimentClass(value: ReportSentiment): string {
-  return value ?? "pending";
-}
-
-function sentimentBadge(
-  value: ReportSentiment,
-  confidence: number,
-): string {
-  const score = value ? ` <small>${Math.round(confidence * 100)}%</small>` : "";
-  return `<span class="sentiment sentiment-${sentimentClass(value)}"><i></i>${sentimentText(value)}${score}</span>`;
-}
-
-function authorInitial(author: string): string {
-  return escapeHtml(author.trim().charAt(0).toLocaleUpperCase("vi-VN") || "?");
+function sentimentMeta(value: ReportSentiment): {
+  label: string;
+  color: string;
+  background: string;
+} {
+  if (value === "positive") {
+    return {
+      label: "Tích cực",
+      color: COLORS.positive,
+      background: COLORS.positiveSoft,
+    };
+  }
+  if (value === "negative") {
+    return {
+      label: "Tiêu cực",
+      color: COLORS.negative,
+      background: COLORS.negativeSoft,
+    };
+  }
+  if (value === "neutral") {
+    return {
+      label: "Trung lập",
+      color: COLORS.neutral,
+      background: COLORS.neutralSoft,
+    };
+  }
+  return {
+    label: "Chờ AI",
+    color: COLORS.pending,
+    background: COLORS.pendingSoft,
+  };
 }
 
 function percent(count: number, total: number): number {
   return total ? Math.round((count / total) * 100) : 0;
 }
 
-function commentHtml(comment: PdfReportComment): string {
+function metricCell(value: number, label: string): ContentStack {
+  return {
+    stack: [
+      {
+        text: value.toLocaleString("vi-VN"),
+        color: COLORS.red,
+        bold: true,
+        fontSize: 17,
+      },
+      { text: label, color: COLORS.muted, fontSize: 8, margin: [0, 2, 0, 0] },
+    ],
+    fillColor: COLORS.white,
+    margin: [9, 8, 9, 8],
+  };
+}
+
+function sentimentSummaryRow(
+  label: string,
+  count: number,
+  rate: number,
+  color: string,
+): Content[] {
+  return [
+    {
+      text: "",
+      fillColor: color,
+      margin: [3, 7, 3, 7],
+    },
+    { text: label, bold: true, color: COLORS.ink, margin: [0, 3, 0, 0] },
+    {
+      text: count.toLocaleString("vi-VN"),
+      bold: true,
+      alignment: "right",
+      margin: [0, 3, 0, 0],
+    },
+    {
+      text: `${rate}%`,
+      color: COLORS.muted,
+      alignment: "right",
+      margin: [0, 3, 0, 0],
+    },
+  ];
+}
+
+function commentContent(comment: PdfReportComment): Content {
   const depth = Math.min(Math.max(comment.depth, 0), 8);
-  return `
-    <div class="comment${depth ? " is-reply" : ""}" style="--indent:${depth * 24}px;--print-indent:${depth * 18}px">
-      <span class="avatar comment-avatar">${authorInitial(comment.author)}</span>
-      <div class="comment-main">
-        <div class="comment-row">
-          <div class="comment-bubble">
-            <strong>${escapeHtml(comment.author)}</strong>
-            <p>${escapeHtml(comment.text)}</p>
-          </div>
-          ${sentimentBadge(comment.sentiment, comment.confidence)}
-        </div>
-        <div class="comment-meta">
-          <span>${depth ? `Phản hồi bậc ${depth}` : "Bình luận"}</span>
-          <span>${escapeHtml(formatDate(comment.publishedAt))}</span>
-        </div>
-      </div>
-    </div>`;
+  const sentiment = sentimentMeta(comment.sentiment);
+  const score = comment.sentiment
+    ? ` · ${Math.round(comment.confidence * 100)}%`
+    : "";
+
+  return {
+    margin: [depth * 14, 3, 0, 3],
+    unbreakable: true,
+    table: {
+      widths: ["*"],
+      body: [
+        [
+          {
+            stack: [
+              {
+                columns: [
+                  {
+                    width: "*",
+                    text: comment.author || "Không xác định",
+                    bold: true,
+                    fontSize: 8.5,
+                    color: COLORS.ink,
+                  },
+                  {
+                    width: "auto",
+                    text: `${sentiment.label}${score}`,
+                    bold: true,
+                    fontSize: 7.5,
+                    color: sentiment.color,
+                  },
+                ],
+              },
+              {
+                text: comment.text,
+                fontSize: 8.5,
+                color: COLORS.ink,
+                margin: [0, 3, 0, 3],
+              },
+              {
+                text: `${depth ? `Phản hồi bậc ${depth}` : "Bình luận"} · ${formatDate(comment.publishedAt)}`,
+                fontSize: 6.8,
+                color: COLORS.muted,
+              },
+            ],
+            fillColor: depth ? "#F8F9FB" : COLORS.surface,
+            margin: [8, 6, 8, 6],
+          },
+        ],
+      ],
+    },
+    layout: {
+      hLineColor: () => COLORS.line,
+      vLineColor: () => COLORS.line,
+      hLineWidth: () => 0.5,
+      vLineWidth: () => 0.5,
+      paddingLeft: () => 0,
+      paddingRight: () => 0,
+      paddingTop: () => 0,
+      paddingBottom: () => 0,
+    },
+  };
 }
 
-function postHtml(post: PdfReportPost, index: number): string {
+function postContent(post: PdfReportPost, index: number): Content[] {
+  const sentiment = sentimentMeta(post.sentiment);
+  const score = post.sentiment
+    ? ` · ${Math.round(post.confidence * 100)}%`
+    : "";
   const originalUrl = safeUrl(post.url);
-  const keywordHtml = post.keywords.length
-    ? post.keywords
-        .map((keyword) => `<span class="keyword">${escapeHtml(keyword)}</span>`)
-        .join("")
-    : '<span class="keyword muted">Chưa xác định</span>';
-  const comments = post.comments.length
-    ? post.comments.map(commentHtml).join("")
-    : '<p class="empty-comments">Chưa có comment/reply được lưu cho bài post này.</p>';
+  const keywords = post.keywords.length
+    ? post.keywords.join(" · ")
+    : "Chưa xác định";
+  const comments: Content[] = post.comments.length
+    ? post.comments.map(commentContent)
+    : [
+        {
+          text: "Chưa có comment/reply được lưu cho bài post này.",
+          italics: true,
+          color: COLORS.muted,
+          fontSize: 8,
+          margin: [0, 6, 0, 3],
+        },
+      ];
 
-  return `
-    <article class="post-card">
-      <header class="post-header">
-        <span class="avatar">${authorInitial(post.author)}</span>
-        <div class="post-identity">
-          <strong>${escapeHtml(post.author)}</strong>
-          <span>${escapeHtml(post.source)} · ${escapeHtml(formatDate(post.publishedAt))} · ●</span>
-        </div>
-        <span class="platform">${escapeHtml(post.platform)}</span>
-        ${sentimentBadge(post.sentiment, post.confidence)}
-      </header>
-      <div class="post-number">Bài post ${index + 1}</div>
-      <p class="post-copy">${escapeHtml(post.text)}</p>
-      <div class="post-details">
-        <div class="keywords"><b>Bắt được keyword</b>${keywordHtml}</div>
-        <div class="post-time">Thu thập ${escapeHtml(formatDate(post.collectedAt))}</div>
-        ${originalUrl ? `<a href="${escapeHtml(originalUrl)}">Mở bài viết gốc ↗</a>` : ""}
-      </div>
-      <div class="comment-summary">
-        <span>${post.comments.length.toLocaleString("vi-VN")} bình luận</span>
-        <span>Chỉ đọc · Không tương tác</span>
-      </div>
-      <div class="comments">${comments}</div>
-    </article>`;
+  const header: Content = {
+    headlineLevel: 1,
+    unbreakable: true,
+    table: {
+      widths: ["*", "auto"],
+      body: [
+        [
+          {
+            stack: [
+              {
+                text: `BÀI POST ${index + 1} · ${post.platform.toLocaleUpperCase("vi-VN")}`,
+                color: COLORS.red,
+                bold: true,
+                fontSize: 7.5,
+                characterSpacing: 0.5,
+              },
+              {
+                text: post.author || "Không xác định",
+                bold: true,
+                fontSize: 11,
+                margin: [0, 3, 0, 1],
+              },
+              {
+                text: `${post.source} · ${formatDate(post.publishedAt)}`,
+                color: COLORS.muted,
+                fontSize: 7.5,
+              },
+            ],
+            margin: [10, 8, 6, 8],
+          },
+          {
+            stack: [
+              {
+                text: `${sentiment.label}${score}`,
+                color: sentiment.color,
+                bold: true,
+                fontSize: 8,
+                alignment: "right",
+              },
+              {
+                text: `${post.comments.length.toLocaleString("vi-VN")} bình luận`,
+                color: COLORS.muted,
+                fontSize: 7,
+                alignment: "right",
+                margin: [0, 4, 0, 0],
+              },
+            ],
+            fillColor: sentiment.background,
+            margin: [9, 11, 9, 11],
+          },
+        ],
+      ],
+    },
+    layout: {
+      hLineColor: () => COLORS.line,
+      vLineColor: () => COLORS.line,
+      hLineWidth: () => 0.6,
+      vLineWidth: () => 0.6,
+      paddingLeft: () => 0,
+      paddingRight: () => 0,
+      paddingTop: () => 0,
+      paddingBottom: () => 0,
+    },
+    margin: [0, index ? 12 : 4, 0, 0],
+  };
+
+  return [
+    header,
+    {
+      stack: [
+        { text: post.text, fontSize: 9.5, color: COLORS.ink },
+        {
+          text: `Keyword: ${keywords}`,
+          color: COLORS.redDark,
+          fontSize: 7.5,
+          bold: true,
+          margin: [0, 7, 0, 0],
+        },
+        {
+          text: `Thu thập: ${formatDate(post.collectedAt)}`,
+          color: COLORS.muted,
+          fontSize: 7,
+          margin: [0, 3, 0, 0],
+        },
+        ...(originalUrl
+          ? [
+              {
+                text: "Mở bài viết gốc",
+                link: originalUrl,
+                color: COLORS.red,
+                decoration: "underline" as const,
+                fontSize: 7.5,
+                margin: [0, 4, 0, 0] as [number, number, number, number],
+              },
+            ]
+          : []),
+      ],
+      margin: [10, 9, 10, 7],
+    },
+    {
+      text: "BÌNH LUẬN VÀ PHẢN HỒI",
+      bold: true,
+      color: COLORS.muted,
+      fontSize: 7,
+      characterSpacing: 0.5,
+      margin: [10, 4, 10, 2],
+    },
+    { stack: comments, margin: [10, 0, 10, 8] },
+  ];
 }
 
-export function buildSocialListeningPrintHtml(
+export function buildSocialListeningPdfDefinition(
   report: SocialListeningPdfReport,
-): string {
+): TDocumentDefinitions {
   const analyzed =
     report.totals.positive + report.totals.neutral + report.totals.negative;
   const positiveRate = percent(report.totals.positive, analyzed);
@@ -164,97 +375,299 @@ export function buildSocialListeningPrintHtml(
   const negativeRate = analyzed
     ? Math.max(0, 100 - positiveRate - neutralRate)
     : 0;
-  const postCards = report.posts.length
-    ? report.posts.map(postHtml).join("")
-    : '<div class="empty-report">Chưa có bài post để xuất báo cáo.</div>';
+  const postContentItems = report.posts.flatMap(postContent);
 
-  return `<!doctype html>
-<html lang="vi">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Báo cáo Social Listening - VinSmart Future</title>
-  <style>
-    :root{--red:#eb0a2a;--red-soft:#fff0f3;--ink:#17171a;--muted:#69696f;--line:#e5e5e7;--surface:#f6f6f7;--positive:#15996b;--neutral:#d99a16;--negative:#df3f49;--pending:#7b8494}
-    *{box-sizing:border-box}
-    html,body{margin:0;background:#eef0f3;color:var(--ink);font-family:Arial,"Segoe UI",sans-serif;font-size:12px;line-height:1.45;-webkit-print-color-adjust:exact;print-color-adjust:exact}
-    body{padding:24px}
-    .report{width:min(960px,100%);margin:auto}
-    .report-hero{background:linear-gradient(135deg,var(--red),#ef4750);color:#fff;border-radius:18px;padding:24px 28px;display:flex;justify-content:space-between;gap:20px;box-shadow:0 12px 28px rgba(226,35,42,.18)}
-    .eyebrow{text-transform:uppercase;letter-spacing:.14em;font-size:9px;font-weight:800;opacity:.86}
-    h1{font-size:26px;line-height:1.1;margin:5px 0}.hero-copy{margin:0;opacity:.9}.generated{text-align:right;white-space:nowrap;align-self:flex-end;font-size:10px}
-    .summary-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:14px 0}
-    .metric{background:#fff;border:1px solid var(--line);border-radius:13px;padding:13px 15px}.metric b{display:block;color:var(--red);font-size:22px}.metric span{color:var(--muted)}
-    .sentiment-panel{background:#fff;border:1px solid var(--line);border-radius:16px;padding:17px 18px;margin-bottom:18px}
-    .section-heading{display:flex;align-items:center;justify-content:space-between;margin-bottom:13px}.section-heading h2{font-size:16px;margin:0}.section-heading span{color:var(--muted)}
-    .sentiment-layout{display:grid;grid-template-columns:140px 1fr;gap:22px;align-items:center}.donut{width:126px;height:126px;border-radius:50%;background:conic-gradient(var(--positive) 0 ${positiveRate}%,var(--neutral) ${positiveRate}% ${positiveRate + neutralRate}%,var(--negative) ${positiveRate + neutralRate}% 100%);display:grid;place-items:center}.donut:after{content:"${analyzed}";display:grid;place-items:center;width:78px;height:78px;border-radius:50%;background:#fff;font-size:22px;font-weight:800;color:var(--ink)}
-    .legend{display:grid;gap:8px}.legend-row{display:grid;grid-template-columns:12px 1fr auto auto;gap:9px;align-items:center;padding:8px 10px;background:var(--surface);border-radius:9px}.dot{width:10px;height:10px;border-radius:50%}.positive .dot{background:var(--positive)}.neutral .dot{background:var(--neutral)}.negative .dot{background:var(--negative)}.legend-row small{color:var(--muted);min-width:34px;text-align:right}
-    .feed-title{display:flex;justify-content:space-between;align-items:flex-end;margin:20px 0 10px}.feed-title h2{font-size:18px;margin:0}.feed-title span{color:var(--muted)}
-    .post-card{background:#fff;border:1px solid #dfe2e7;border-radius:15px;margin:0 0 16px;overflow:hidden;box-shadow:0 3px 12px rgba(16,24,40,.06)}
-    .post-header{display:flex;align-items:center;gap:10px;padding:15px 16px 8px;break-inside:avoid}.avatar{width:40px;height:40px;flex:0 0 40px;border-radius:50%;background:linear-gradient(145deg,#eb0a2a,#ff4058);color:#fff;display:grid;place-items:center;font-weight:800;font-size:16px}.comment-avatar{width:32px;height:32px;flex-basis:32px;font-size:12px}
-    .post-identity{min-width:0;flex:1}.post-identity strong{display:block;font-size:13px}.post-identity span{display:block;color:var(--muted);font-size:10px}.platform{border:1px solid #cbd5e1;background:#f8fafc;border-radius:999px;padding:4px 8px;text-transform:capitalize;font-size:9px;color:#475467}
-    .sentiment{display:inline-flex;align-items:center;gap:5px;border-radius:999px;padding:4px 8px;font-size:9px;font-weight:800;white-space:nowrap}.sentiment i{width:7px;height:7px;border-radius:50%}.sentiment small{font-size:8px;opacity:.8}.sentiment-positive{color:#087851;background:#eafaf3}.sentiment-positive i{background:var(--positive)}.sentiment-neutral{color:#925f00;background:#fff7df}.sentiment-neutral i{background:var(--neutral)}.sentiment-negative{color:#b4232d;background:#fff0f1}.sentiment-negative i{background:var(--negative)}.sentiment-pending{color:#596273;background:#f0f2f5}.sentiment-pending i{background:var(--pending)}
-    .post-number{padding:2px 16px;color:var(--red);font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:.08em}.post-copy{font-size:13px;white-space:pre-wrap;margin:7px 16px 12px}.post-details{border-top:1px solid #f0f1f3;padding:10px 16px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;color:var(--muted);font-size:9px}.keywords{display:flex;align-items:center;gap:5px;flex-wrap:wrap;margin-right:auto}.keyword{color:#a3131b;background:var(--red-soft);border:1px solid #ffcdd0;border-radius:999px;padding:3px 7px}.keyword.muted{color:var(--muted);background:#f2f4f7;border-color:#e5e7eb}.post-details a{color:var(--red);text-decoration:none;font-weight:700}
-    .comment-summary{display:flex;justify-content:space-between;padding:9px 16px;border-top:1px solid var(--line);border-bottom:1px solid var(--line);color:var(--muted);font-size:9px}.comments{padding:9px 16px 13px}.comment{display:flex;gap:8px;margin:7px 0 7px var(--indent);break-inside:avoid}.comment-main{min-width:0;flex:1}.comment-row{display:flex;align-items:flex-start;gap:8px}.comment-bubble{background:#f0f2f5;border-radius:13px;padding:7px 10px;min-width:0;flex:1}.comment-bubble strong{font-size:10px}.comment-bubble p{margin:2px 0 0;font-size:11px;white-space:pre-wrap}.comment-meta{display:flex;gap:10px;color:var(--muted);font-size:8px;padding:3px 8px}.empty-comments,.empty-report{color:var(--muted);font-style:italic;padding:12px 16px}
-    .report-footer{text-align:center;color:var(--muted);font-size:9px;padding:8px 0 24px}
-    @media print{
-      @page{size:A4 portrait;margin:11mm}
-      html,body{background:#fff;font-size:10px}body{padding:0}.report{width:100%;max-width:none}
-      .report-hero{border-radius:12px;box-shadow:none;padding:18px 20px}.summary-grid{gap:7px;margin:10px 0}.metric{padding:9px 11px}.metric b{font-size:18px}
-      .sentiment-panel{padding:13px 14px;margin-bottom:12px}.sentiment-layout{grid-template-columns:110px 1fr}.donut{width:98px;height:98px}.donut:after{width:62px;height:62px;font-size:18px}
-      .feed-title{margin:14px 0 8px}.post-card{box-shadow:none;margin-bottom:11px}.post-header{padding-top:11px}.avatar{width:34px;height:34px;flex-basis:34px}.comment-avatar{width:27px;height:27px;flex-basis:27px}.post-copy{font-size:11px}.comment{margin-left:var(--print-indent)}
-      a{color:inherit}.post-card,.sentiment-panel,.metric{print-color-adjust:exact;-webkit-print-color-adjust:exact}.comment,.post-header,.post-details,.comment-summary{break-inside:avoid}
-    }
-  </style>
-</head>
-<body>
-  <main class="report">
-    <header class="report-hero">
-      <div><div class="eyebrow">Social Listening</div><h1>VinSmart Future</h1><p class="hero-copy">Báo cáo cơ cấu sắc thái và toàn bộ bài post</p></div>
-      <div class="generated">Xuất lúc<br><b>${escapeHtml(formatDate(report.generatedAt))}</b></div>
-    </header>
-    <section class="summary-grid">
-      <div class="metric"><b>${report.totals.posts.toLocaleString("vi-VN")}</b><span>Bài post</span></div>
-      <div class="metric"><b>${report.totals.comments.toLocaleString("vi-VN")}</b><span>Bình luận</span></div>
-      <div class="metric"><b>${analyzed.toLocaleString("vi-VN")}</b><span>Đã phân tích</span></div>
-      <div class="metric"><b>${report.totals.pending.toLocaleString("vi-VN")}</b><span>Chờ AI</span></div>
-    </section>
-    <section class="sentiment-panel">
-      <div class="section-heading"><h2>Cơ cấu sắc thái comment</h2><span>${analyzed.toLocaleString("vi-VN")} mẫu đã phân tích</span></div>
-      <div class="sentiment-layout">
-        <div class="donut" aria-label="${positiveRate}% tích cực, ${neutralRate}% trung lập, ${negativeRate}% tiêu cực"></div>
-        <div class="legend">
-          <div class="legend-row positive"><i class="dot"></i><span>Tích cực</span><b>${report.totals.positive.toLocaleString("vi-VN")}</b><small>${positiveRate}%</small></div>
-          <div class="legend-row neutral"><i class="dot"></i><span>Trung lập</span><b>${report.totals.neutral.toLocaleString("vi-VN")}</b><small>${neutralRate}%</small></div>
-          <div class="legend-row negative"><i class="dot"></i><span>Tiêu cực</span><b>${report.totals.negative.toLocaleString("vi-VN")}</b><small>${negativeRate}%</small></div>
-        </div>
-      </div>
-    </section>
-    <div class="feed-title"><h2>Toàn bộ bài post</h2><span>${report.posts.length.toLocaleString("vi-VN")} bài · ${report.totals.comments.toLocaleString("vi-VN")} bình luận</span></div>
-    <section class="feed">${postCards}</section>
-    <footer class="report-footer">Social Listening · VinSmart Future · Bản in chỉ đọc</footer>
-  </main>
-</body>
-</html>`;
+  return {
+    pageSize: "A4",
+    pageMargins: [34, 34, 34, 38],
+    info: {
+      title: "Báo cáo Social Listening - VinSmart Future",
+      author: "Social Listening",
+      subject: "Bài viết, bình luận và phân tích sắc thái",
+      keywords: "VinSmart Future, social listening, sentiment",
+    },
+    defaultStyle: {
+      font: "NotoSans",
+      fontSize: 9,
+      color: COLORS.ink,
+      lineHeight: 1.25,
+    },
+    footer: (currentPage: number, pageCount: number) => ({
+      columns: [
+        {
+          text: "Social Listening · VinSmart Future · Báo cáo chỉ đọc",
+          color: COLORS.muted,
+          fontSize: 7,
+        },
+        {
+          text: `${currentPage}/${pageCount}`,
+          alignment: "right",
+          color: COLORS.muted,
+          fontSize: 7,
+        },
+      ],
+      margin: [34, 10, 34, 0],
+    }),
+    pageBreakBefore: (
+      currentNode,
+      followingNodesOnPage,
+      _nodesOnNextPage,
+      previousNodesOnPage,
+    ) =>
+      currentNode.headlineLevel === 1 &&
+      previousNodesOnPage.length > 0 &&
+      followingNodesOnPage.length < 2,
+    content: [
+      {
+        table: {
+          widths: ["*", 118],
+          body: [
+            [
+              {
+                stack: [
+                  {
+                    text: "SOCIAL LISTENING",
+                    fontSize: 8,
+                    bold: true,
+                    color: "#FFD8DF",
+                    characterSpacing: 1.2,
+                  },
+                  {
+                    text: "VinSmart Future",
+                    fontSize: 23,
+                    bold: true,
+                    color: COLORS.white,
+                    margin: [0, 4, 0, 3],
+                  },
+                  {
+                    text: "Báo cáo sắc thái, bài viết và toàn bộ luồng bình luận",
+                    fontSize: 8.5,
+                    color: "#FFE8ED",
+                  },
+                ],
+                fillColor: COLORS.red,
+                margin: [16, 14, 12, 14],
+              },
+              {
+                stack: [
+                  {
+                    text: "XUẤT LÚC",
+                    fontSize: 7,
+                    bold: true,
+                    color: "#FFD8DF",
+                    alignment: "right",
+                  },
+                  {
+                    text: formatDate(report.generatedAt),
+                    fontSize: 9,
+                    bold: true,
+                    color: COLORS.white,
+                    alignment: "right",
+                    margin: [0, 5, 0, 0],
+                  },
+                ],
+                fillColor: COLORS.redDark,
+                margin: [10, 17, 12, 17],
+              },
+            ],
+          ],
+        },
+        layout: "noBorders",
+        margin: [0, 0, 0, 10],
+      },
+      {
+        table: {
+          widths: ["*", "*", "*", "*"],
+          body: [
+            [
+              metricCell(report.totals.posts, "Bài post"),
+              metricCell(report.totals.comments, "Bình luận"),
+              metricCell(analyzed, "Đã phân tích"),
+              metricCell(report.totals.pending, "Chờ AI"),
+            ],
+          ],
+        },
+        layout: {
+          hLineColor: () => COLORS.line,
+          vLineColor: () => COLORS.line,
+          hLineWidth: () => 0.6,
+          vLineWidth: () => 0.6,
+          paddingLeft: () => 0,
+          paddingRight: () => 0,
+          paddingTop: () => 0,
+          paddingBottom: () => 0,
+        },
+        margin: [0, 0, 0, 10],
+      },
+      {
+        stack: [
+          {
+            columns: [
+              {
+                width: "*",
+                text: "Cơ cấu sắc thái comment",
+                bold: true,
+                fontSize: 12,
+              },
+              {
+                width: "auto",
+                text: `${analyzed.toLocaleString("vi-VN")} mẫu đã phân tích`,
+                color: COLORS.muted,
+                fontSize: 7.5,
+              },
+            ],
+          },
+          {
+            table: {
+              widths: [18, "*", 52, 42],
+              body: [
+                sentimentSummaryRow(
+                  "Tích cực",
+                  report.totals.positive,
+                  positiveRate,
+                  COLORS.positive,
+                ),
+                sentimentSummaryRow(
+                  "Trung lập",
+                  report.totals.neutral,
+                  neutralRate,
+                  COLORS.neutral,
+                ),
+                sentimentSummaryRow(
+                  "Tiêu cực",
+                  report.totals.negative,
+                  negativeRate,
+                  COLORS.negative,
+                ),
+              ],
+            },
+            layout: {
+              hLineColor: () => COLORS.line,
+              vLineColor: () => COLORS.line,
+              hLineWidth: () => 0.5,
+              vLineWidth: () => 0,
+              paddingLeft: () => 4,
+              paddingRight: () => 4,
+              paddingTop: () => 3,
+              paddingBottom: () => 3,
+            },
+            margin: [0, 8, 0, 0],
+          },
+        ],
+        fillColor: COLORS.white,
+        margin: [10, 9, 10, 10],
+      },
+      {
+        columns: [
+          {
+            width: "*",
+            text: "Toàn bộ bài post",
+            bold: true,
+            fontSize: 14,
+            margin: [0, 13, 0, 5],
+          },
+          {
+            width: "auto",
+            text: `${report.posts.length.toLocaleString("vi-VN")} bài · ${report.totals.comments.toLocaleString("vi-VN")} bình luận`,
+            color: COLORS.muted,
+            fontSize: 7.5,
+            margin: [0, 17, 0, 5],
+          },
+        ],
+      },
+      ...(postContentItems.length
+        ? postContentItems
+        : [
+            {
+              text: "Chưa có bài post để xuất báo cáo.",
+              italics: true,
+              color: COLORS.muted,
+              margin: [0, 12, 0, 0] as [number, number, number, number],
+            },
+          ]),
+    ],
+  };
 }
 
-export function openSocialListeningPrintWindow(): Window | null {
-  const printWindow = window.open("", "social-listening-vsf-report");
-  if (!printWindow) return null;
-  printWindow.document.open();
-  printWindow.document.write(`<!doctype html><html lang="vi"><head><meta charset="utf-8"><title>Đang tạo báo cáo…</title></head><body style="font-family:Arial,sans-serif;padding:32px;color:#172033"><h2>Đang tải toàn bộ bài post…</h2><p>Vui lòng giữ cửa sổ này mở.</p></body></html>`);
-  printWindow.document.close();
-  return printWindow;
+async function loadPdfMake() {
+  const pdfModule = (await import("pdfmake/build/pdfmake")) as typeof import("pdfmake/build/pdfmake") & {
+    default?: typeof import("pdfmake/build/pdfmake");
+  };
+  const pdfMake = pdfModule.default ?? pdfModule;
+  const [regular, bold] = await Promise.all([
+    fetchFontAsBase64("/fonts/NotoSans-Regular.ttf"),
+    fetchFontAsBase64("/fonts/NotoSans-Bold.ttf"),
+  ]);
+  pdfMake.vfs = {
+    "NotoSans-Regular.ttf": regular,
+    "NotoSans-Bold.ttf": bold,
+  } satisfies VirtualFileSystem;
+  pdfMake.fonts = {
+    NotoSans: {
+      normal: "NotoSans-Regular.ttf",
+      bold: "NotoSans-Bold.ttf",
+      italics: "NotoSans-Regular.ttf",
+      bolditalics: "NotoSans-Bold.ttf",
+    },
+  };
+  return pdfMake;
 }
 
-export async function printSocialListeningReport(
+function bytesToBase64(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer);
+  const chunkSize = 0x8000;
+  let binary = "";
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
+  }
+  return window.btoa(binary);
+}
+
+async function fetchFontAsBase64(path: string): Promise<string> {
+  const response = await fetch(path);
+  if (!response.ok) {
+    throw new Error(`Không tải được font tiếng Việt cho PDF (${response.status}).`);
+  }
+  return bytesToBase64(await response.arrayBuffer());
+}
+
+export async function createSocialListeningPdfBlob(
   report: SocialListeningPdfReport,
-  printWindow: Window,
-): Promise<void> {
-  printWindow.document.open();
-  printWindow.document.write(buildSocialListeningPrintHtml(report));
-  printWindow.document.close();
-  await printWindow.document.fonts.ready;
-  printWindow.focus();
-  window.setTimeout(() => printWindow.print(), 250);
+): Promise<Blob> {
+  const pdfMake = await loadPdfMake();
+  const definition = buildSocialListeningPdfDefinition(report);
+  return new Promise<Blob>((resolve, reject) => {
+    try {
+      pdfMake.createPdf(definition).getBlob(resolve);
+    } catch (error) {
+      reject(error instanceof Error ? error : new Error(String(error)));
+    }
+  });
+}
+
+function reportFilename(generatedAt: string): string {
+  const date = new Date(generatedAt);
+  const valid = Number.isNaN(date.getTime()) ? new Date() : date;
+  const stamp = valid
+    .toLocaleString("sv-SE", { timeZone: "Asia/Ho_Chi_Minh" })
+    .replace(" ", "-")
+    .replaceAll(":", "");
+  return `bao-cao-social-listening-${stamp}.pdf`;
+}
+
+export async function downloadSocialListeningPdf(
+  report: SocialListeningPdfReport,
+): Promise<string> {
+  const blob = await createSocialListeningPdfBlob(report);
+  const filename = reportFilename(report.generatedAt);
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.style.display = "none";
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
+  return filename;
 }

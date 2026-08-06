@@ -1,6 +1,13 @@
-import { buildSentimentSystemPrompt, buildSentimentUserPrompt } from "../prompt.js";
 import {
+  buildSentimentBatchSystemPrompt,
+  buildSentimentBatchUserPrompt,
+  buildSentimentSystemPrompt,
+  buildSentimentUserPrompt,
+} from "../prompt.js";
+import {
+  SentimentBatchResultSchema,
   SentimentResultSchema,
+  type SentimentBatchResult,
   type SentimentInput,
   type SentimentProvider,
   type SentimentResult,
@@ -11,6 +18,22 @@ interface ProviderOptions {
   apiKey: string | undefined;
   model: string;
   name?: string;
+}
+
+function assertCompleteBatch(
+  inputs: SentimentInput[],
+  results: SentimentBatchResult,
+): SentimentBatchResult {
+  const requested = new Set(inputs.map((input) => input.entityId));
+  const returned = new Set(results.map((result) => result.entityId));
+  if (
+    returned.size !== results.length ||
+    returned.size !== requested.size ||
+    [...requested].some((entityId) => !returned.has(entityId))
+  ) {
+    throw new Error("Sentiment provider returned an incomplete batch.");
+  }
+  return results;
 }
 
 function isGpt56Model(model: string): boolean {
@@ -86,5 +109,52 @@ export class OpenAICompatibleSentimentProvider
     return SentimentResultSchema.parse(
       JSON.parse(stripCodeFence(content)) as unknown,
     );
+  }
+
+  async analyzeBatch(inputs: SentimentInput[]): Promise<SentimentBatchResult> {
+    if (inputs.length === 0) return [];
+    const requestBody = {
+      model: this.model,
+      ...(
+        isGpt56Model(this.model)
+          ? { reasoning_effort: "none" }
+          : isGeminiModel(this.model)
+            ? { reasoning_effort: "low" }
+            : { temperature: 0 }
+      ),
+      response_format: { type: "json_object" },
+      messages: [
+        { role: "system", content: buildSentimentBatchSystemPrompt() },
+        { role: "user", content: buildSentimentBatchUserPrompt(inputs) },
+      ],
+    };
+    const response = await fetch(`${this.baseUrl}/chat/completions`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        ...(this.apiKey
+          ? { authorization: `Bearer ${this.apiKey}` }
+          : {}),
+      },
+      body: JSON.stringify(requestBody),
+      signal: AbortSignal.timeout(60_000),
+    });
+
+    if (!response.ok) {
+      throw new Error(`Sentiment provider returned HTTP ${response.status}.`);
+    }
+
+    const payload = (await response.json()) as {
+      choices?: Array<{ message?: { content?: string } }>;
+    };
+    const content = payload.choices?.[0]?.message?.content;
+    if (!content) {
+      throw new Error("Sentiment provider returned an empty response.");
+    }
+
+    const parsed = SentimentBatchResultSchema.parse(
+      JSON.parse(stripCodeFence(content)) as unknown,
+    );
+    return assertCompleteBatch(inputs, parsed.results);
   }
 }

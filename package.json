@@ -9,7 +9,7 @@
     "dev": "vinext dev",
     "build": "vinext build",
     "start": "vinext start",
-    "test": "npm run build && node --test tests/rendered-html.test.mjs",
+    "test": "npm run build && node --test tests/rendered-html.test.mjs tests/pdf-download.test.mjs",
     "test:all": "npm test && npm test --prefix services/api && npm test --prefix services/worker && npm test --prefix apps/extension",
     "build:all": "npm run build && npm run build --prefix services/api && npm run build --prefix services/worker && npm run build --prefix apps/extension",
     "dev:api": "npm run dev --prefix services/api",
@@ -23,6 +23,7 @@
   "dependencies": {
     "drizzle-orm": "0.45.2",
     "next": "16.2.12",
+    "pdfmake": "^0.2.20",
     "react": "19.2.6",
     "react-dom": "19.2.6"
   },
@@ -30,6 +31,7 @@
     "@cloudflare/vite-plugin": "1.37.1",
     "@tailwindcss/postcss": "4.2.1",
     "@types/node": "22.19.19",
+    "@types/pdfmake": "^0.2.12",
     "@types/react": "19.2.14",
     "@types/react-dom": "19.2.3",
     "@vitejs/plugin-react": "6.0.2",
